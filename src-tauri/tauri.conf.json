@@ -27,10 +27,7 @@
     },
     "bundle": {
         "active": true,
-        "targets": [
-            "dmg",
-            "app"
-        ],
+        "targets": "all",
         "macOS": {
             "minimumSystemVersion": "10.15"
         },
