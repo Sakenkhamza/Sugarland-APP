@@ -21,9 +21,13 @@ pub struct Auction {
 #[derive(Debug, Deserialize)]
 pub struct CreateAuctionRequest {
     pub name: String,
+    #[serde(default)]
     pub vendor_id: Option<String>,
+    #[serde(default)]
     pub hibid_auction_id: Option<String>,
+    #[serde(default)]
     pub start_date: Option<String>,
+    #[serde(default)]
     pub end_date: Option<String>,
 }
 
@@ -79,28 +83,6 @@ impl AuctionManager {
         Ok(auctions)
     }
 
-    pub fn assign_items_to_auction(db: &Database, auction_id: &str, item_ids: Vec<String>) -> Result<usize> {
-        let mut count = 0;
-        let tx = db.conn.unchecked_transaction()?;
-
-        for item_id in item_ids {
-            tx.execute(
-                "UPDATE inventory_items SET auction_id = ?1, current_status = 'Listed', listed_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                rusqlite::params![auction_id, item_id],
-            )?;
-            count += 1;
-        }
-        
-        // Update auction total_lots count
-        tx.execute(
-            "UPDATE auctions SET total_lots = (SELECT COUNT(*) FROM inventory_items WHERE auction_id = ?1) WHERE id = ?1",
-            rusqlite::params![auction_id],
-        )?;
-
-        tx.commit()?;
-        Ok(count)
-    }
-
     pub fn get_auction_by_id(db: &Database, auction_id: &str) -> Result<Auction> {
         db.conn.query_row(
             "SELECT id, hibid_auction_id, name, vendor_id, start_date, end_date, status, total_lots, created_at
@@ -154,16 +136,6 @@ pub fn create_auction(
 pub fn get_auctions(state: State<crate::AppState>) -> Result<Vec<Auction>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     AuctionManager::list_auctions(&db).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn assign_items(
-    auction_id: String,
-    item_ids: Vec<String>,
-    state: State<crate::AppState>,
-) -> Result<usize, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    AuctionManager::assign_items_to_auction(&db, &auction_id, item_ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

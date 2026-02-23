@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import type { Auction, InventoryItem } from '@/types';
-import { ArrowLeft, Download, Plus, X, Search, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Download, X, Search, CheckCircle2, FileSpreadsheet } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,12 +24,16 @@ export function AuctionDetailPage() {
     const navigate = useNavigate();
 
     const [auction, setAuction] = useState<Auction | null>(null);
-    const [assignedItems, setAssignedItems] = useState<InventoryItem[]>([]);
-    const [availableItems, setAvailableItems] = useState<InventoryItem[]>([]);
+    const [auctionItems, setAuctionItems] = useState<InventoryItem[]>([]);
 
     const [loading, setLoading] = useState(true);
+
+    // Filters
     const [searchQuery, setSearchQuery] = useState('');
-    const [selectedItemsToAdd, setSelectedItemsToAdd] = useState<Set<string>>(new Set());
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [vendorFilter, setVendorFilter] = useState('all');
+    const [sortOrder, setSortOrder] = useState<'default' | 'retail_asc' | 'retail_desc'>('default');
+
     const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
     useEffect(() => {
@@ -44,11 +49,7 @@ export function AuctionDetailPage() {
             setAuction(auc);
 
             const allItems = await api.getInventoryItems();
-
-            setAssignedItems(allItems.filter(item => item.auction_id === auctionId));
-            setAvailableItems(allItems.filter(item => item.current_status === 'InStock' && !item.auction_id));
-
-            setSelectedItemsToAdd(new Set());
+            setAuctionItems(allItems.filter(item => item.auction_id === auctionId));
         } catch (err) {
             console.error('Failed to load auction data:', err);
             toast.error('Failed to load auction data');
@@ -87,25 +88,48 @@ export function AuctionDetailPage() {
         }
     };
 
-    const handleToggleAddItem = (itemId: string) => {
-        const next = new Set(selectedItemsToAdd);
-        if (next.has(itemId)) {
-            next.delete(itemId);
-        } else {
-            next.add(itemId);
-        }
-        setSelectedItemsToAdd(next);
-    };
-
-    const handleAddSelected = async () => {
-        if (!auction || selectedItemsToAdd.size === 0) return;
+    const handleExportExcel = async () => {
+        if (!auction || auctionItems.length === 0) return;
         try {
-            await api.assignItemsToAuction(auction.id, Array.from(selectedItemsToAdd));
-            toast.success(`${selectedItemsToAdd.size} items added to auction`);
-            await loadAuctionData(auction.id);
+            const formattedData = auctionItems.map((item) => {
+                const retail = item.retail_price || 0;
+                const cost = item.cost_price || 0;
+                const min_price = item.min_price || 0;
+
+                const cost_pct = retail > 0 ? parseFloat((cost / retail).toFixed(4)) : 0;
+                const min_pr_10_pct = retail * 0.10;
+
+                return {
+                    'Auction name': auction.name,
+                    'LotNumber': item.lot_number || '',
+                    'Quantity': 1,
+                    'Title': item.raw_title || '',
+                    'Vendor Code': item.source === 'Best Buy' ? 'ATXSUGAR' : '',
+                    'Retail Price': retail,
+                    'Source': item.source || '',
+                    'cost': cost_pct,
+                    'cost price': cost,
+                    'Retail price': retail,
+                    '% min pr (+10%)': min_pr_10_pct,
+                    'min price': min_price
+                };
+            });
+
+            const worksheet = XLSX.utils.json_to_sheet(formattedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
+
+            const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+
+            const defaultName = `${auction.name.replace(/\s+/g, '_')}_Manager_Report.xlsx`;
+            const savePath = await api.saveFile(defaultName);
+            if (!savePath) return;
+
+            await api.saveBinaryFile(savePath as string, new Uint8Array(excelBuffer));
+            toast.success(`Exported Excel to ${savePath}`);
         } catch (error) {
-            console.error('Failed to assign items:', error);
-            toast.error('Failed to add items to auction');
+            console.error('Failed to export Excel:', error);
+            toast.error('Failed to export Excel');
         }
     };
 
@@ -117,13 +141,27 @@ export function AuctionDetailPage() {
         return <div className="p-8 text-center text-red-500">Auction not found</div>;
     }
 
-    const totalRetail = assignedItems.reduce((acc, item) => acc + (item.retail_price || 0), 0);
-    const estRevenue = assignedItems.reduce((acc, item) => acc + (item.min_price || 0), 0);
+    const totalRetail = auctionItems.reduce((acc, item) => acc + (item.retail_price || 0), 0);
+    const estRevenue = auctionItems.reduce((acc, item) => acc + (item.min_price || 0), 0);
 
-    const filteredAvailableItems = availableItems.filter(item =>
-        item.raw_title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.lot_number?.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredItems = auctionItems.filter(item => {
+        const matchesSearch = item.raw_title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            item.lot_number?.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesStatus = statusFilter === 'all' || item.current_status === statusFilter;
+        const matchesVendor = vendorFilter === 'all' || item.source === vendorFilter;
+        return matchesSearch && matchesStatus && matchesVendor;
+    });
+
+    const sortedItems = [...filteredItems].sort((a, b) => {
+        if (sortOrder === 'retail_asc') {
+            return (a.retail_price || 0) - (b.retail_price || 0);
+        } else if (sortOrder === 'retail_desc') {
+            return (b.retail_price || 0) - (a.retail_price || 0);
+        }
+        return 0;
+    });
+
+    const uniqueVendors = Array.from(new Set(auctionItems.map(i => i.source).filter(Boolean))) as string[];
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -174,14 +212,25 @@ export function AuctionDetailPage() {
                         </Button>
                     )}
                     {['Draft', 'Active', 'Completed'].includes(auction.status) && (
-                        <Button
-                            variant="outline"
-                            onClick={handleExportCsv}
-                            disabled={assignedItems.length === 0}
-                        >
-                            <Download className="mr-2 h-4 w-4" />
-                            Export CSV
-                        </Button>
+                        <>
+                            <Button
+                                variant="outline"
+                                onClick={handleExportCsv}
+                                disabled={auctionItems.length === 0}
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                Export CSV
+                            </Button>
+                            <Button
+                                variant="outline"
+                                onClick={handleExportExcel}
+                                disabled={auctionItems.length === 0}
+                                className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 dark:text-emerald-400 dark:border-emerald-800 dark:hover:bg-emerald-950/50"
+                            >
+                                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                                Export Excel
+                            </Button>
+                        </>
                     )}
                 </div>
             </div>
@@ -193,7 +242,7 @@ export function AuctionDetailPage() {
                         <CardTitle className="text-sm font-medium text-muted-foreground">Total Lots</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{assignedItems.length}</div>
+                        <div className="text-2xl font-bold">{auctionItems.length}</div>
                     </CardContent>
                 </Card>
                 <Card>
@@ -214,10 +263,55 @@ export function AuctionDetailPage() {
                 </Card>
             </div>
 
-            {/* Assigned Items Section */}
+            {/* Auction Items Section */}
             <Card>
                 <CardHeader>
-                    <CardTitle>Assigned Items</CardTitle>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <CardTitle>Auction Items</CardTitle>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="relative w-full sm:w-64">
+                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                    placeholder="Search lot, title..."
+                                    className="pl-9 bg-background/80"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                />
+                            </div>
+                            <select
+                                className="flex h-10 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                value={sortOrder}
+                                onChange={(e) => setSortOrder(e.target.value as any)}
+                            >
+                                <option value="default">Sort: Default</option>
+                                <option value="retail_asc">Retail: Low to High</option>
+                                <option value="retail_desc">Retail: High to Low</option>
+                            </select>
+                            <select
+                                className="flex h-10 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                            >
+                                <option value="all">All Statuses</option>
+                                <option value="Listed">Listed</option>
+                                <option value="Sold">Sold</option>
+                                <option value="Buyback">Buyback</option>
+                                <option value="Scrap">Scrap</option>
+                            </select>
+                            {uniqueVendors.length > 0 && (
+                                <select
+                                    className="flex h-10 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    value={vendorFilter}
+                                    onChange={(e) => setVendorFilter(e.target.value)}
+                                >
+                                    <option value="all">All Vendors</option>
+                                    {uniqueVendors.map(v => (
+                                        <option key={v} value={v}>{v}</option>
+                                    ))}
+                                </select>
+                            )}
+                        </div>
+                    </div>
                 </CardHeader>
                 <CardContent>
                     <Table>
@@ -225,30 +319,50 @@ export function AuctionDetailPage() {
                             <TableRow>
                                 <TableHead>Lot #</TableHead>
                                 <TableHead>Title</TableHead>
-                                <TableHead>Retail</TableHead>
-                                <TableHead>Cost</TableHead>
-                                <TableHead>Min Price</TableHead>
+                                <TableHead>Source</TableHead>
+                                <TableHead>Vendor Code</TableHead>
+                                <TableHead className="text-right">Retail</TableHead>
+                                <TableHead className="text-right">Cost %</TableHead>
+                                <TableHead className="text-right">Cost Price</TableHead>
+                                <TableHead className="text-right">Min Pr (+10%)</TableHead>
+                                <TableHead className="text-right">Min Price</TableHead>
                                 <TableHead>Status</TableHead>
                                 {auction.status !== 'Completed' && <TableHead className="w-12"></TableHead>}
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {assignedItems.length === 0 ? (
+                            {sortedItems.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                                        No items assigned yet
+                                    <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                                        No items found
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                assignedItems.map((item) => (
+                                sortedItems.map((item) => (
                                     <TableRow key={item.id}>
                                         <TableCell className="font-medium">{item.lot_number || '-'}</TableCell>
                                         <TableCell className="max-w-xs truncate">{item.raw_title}</TableCell>
-                                        <TableCell>{formatCurrency(item.retail_price || 0)}</TableCell>
-                                        <TableCell>{formatCurrency(item.cost_price || 0)}</TableCell>
-                                        <TableCell>{formatCurrency(item.min_price || 0)}</TableCell>
                                         <TableCell>
-                                            <Badge variant="outline">{item.current_status}</Badge>
+                                            <Badge variant="outline">{item.source || 'Unknown'}</Badge>
+                                        </TableCell>
+                                        <TableCell className="text-muted-foreground text-xs font-mono">
+                                            {item.source === 'Best Buy' ? 'ATXSUGAR' : '-'}
+                                        </TableCell>
+                                        <TableCell className="text-right font-medium">{formatCurrency(item.retail_price || 0)}</TableCell>
+                                        <TableCell className="text-right text-muted-foreground text-xs">
+                                            {item.retail_price ? (((item.cost_price || 0) / item.retail_price) * 100).toFixed(1) + '%' : '0%'}
+                                        </TableCell>
+                                        <TableCell className="text-right">{formatCurrency(item.cost_price || 0)}</TableCell>
+                                        <TableCell className="text-right text-muted-foreground text-xs">
+                                            {formatCurrency((item.retail_price || 0) * 0.10)}
+                                        </TableCell>
+                                        <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                                            {formatCurrency(item.min_price || 0)}
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge variant="secondary" className={getStatusColor(item.current_status)}>
+                                                {item.current_status}
+                                            </Badge>
                                         </TableCell>
                                         {auction.status !== 'Completed' && (
                                             <TableCell>
@@ -272,82 +386,11 @@ export function AuctionDetailPage() {
                             )}
                         </TableBody>
                     </Table>
+                    <div className="mt-4 text-xs text-muted-foreground text-center">
+                        Showing {sortedItems.length} of {auctionItems.length} items
+                    </div>
                 </CardContent>
             </Card>
-
-            {/* Add Items Section */}
-            {['Draft', 'Active'].includes(auction.status) && (
-                <Card>
-                    <CardHeader>
-                        <div className="flex items-center justify-between">
-                            <CardTitle>Available Inventory</CardTitle>
-                            {selectedItemsToAdd.size > 0 && (
-                                <Button size="sm" onClick={handleAddSelected}>
-                                    <Plus className="mr-2 h-4 w-4" />
-                                    Add Selected ({selectedItemsToAdd.size})
-                                </Button>
-                            )}
-                        </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="relative">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search available inventory by title or lot number..."
-                                className="pl-9"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                            />
-                        </div>
-                        <div className="border rounded-md">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-12"></TableHead>
-                                        <TableHead>Lot #</TableHead>
-                                        <TableHead>Title</TableHead>
-                                        <TableHead>Source</TableHead>
-                                        <TableHead>Retail</TableHead>
-                                        <TableHead>Min Price</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {filteredAvailableItems.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                                                No available inventory matches search
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        filteredAvailableItems.map((item) => {
-                                            const isSelected = selectedItemsToAdd.has(item.id);
-                                            return (
-                                                <TableRow key={item.id} className={isSelected ? 'bg-muted/50' : ''}>
-                                                    <TableCell>
-                                                        <div
-                                                            className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer ${isSelected ? 'bg-primary border-primary' : 'border-input'}`}
-                                                            onClick={() => handleToggleAddItem(item.id)}
-                                                        >
-                                                            {isSelected && <CheckCircle2 className="h-3 w-3 text-primary-foreground" />}
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell className="font-medium">{item.lot_number || '-'}</TableCell>
-                                                    <TableCell className="max-w-xs truncate">{item.raw_title}</TableCell>
-                                                    <TableCell>
-                                                        <Badge variant="outline">{item.source}</Badge>
-                                                    </TableCell>
-                                                    <TableCell>{formatCurrency(item.retail_price || 0)}</TableCell>
-                                                    <TableCell>{formatCurrency(item.min_price || 0)}</TableCell>
-                                                </TableRow>
-                                            );
-                                        })
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
         </div>
     );
 }

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { FileText, Loader2, X } from 'lucide-react';
 import { api } from '@/lib/api';
-import type { Vendor } from '@/types';
+import type { Vendor, ValidationResult } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -19,6 +19,9 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isLoadingVendors, setIsLoadingVendors] = useState(false);
+    const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
+    const [isValidating, setIsValidating] = useState(false);
+    const [editedCoefficients, setEditedCoefficients] = useState<Record<string, number>>({});
 
     useEffect(() => {
         if (open) {
@@ -28,6 +31,8 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
             setCsvFilePath(null);
             setSelectedVendorId(null);
             setIsSubmitting(false);
+            setValidationResult(null);
+            setIsValidating(false);
         }
     }, [open]);
 
@@ -35,7 +40,15 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
         try {
             setIsLoadingVendors(true);
             const data = await api.getVendors();
-            setVendors(data.filter(v => v.is_active));
+            const activeVendors = data.filter(v => v.is_active);
+            setVendors(activeVendors);
+
+            // Initialize edited coefficients
+            const coefs: Record<string, number> = {};
+            activeVendors.forEach(v => {
+                coefs[v.id] = v.cost_coefficient;
+            });
+            setEditedCoefficients(coefs);
         } catch (err) {
             console.error('Failed to load vendors:', err);
         } finally {
@@ -48,6 +61,17 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
             const filePath = await api.selectFile([{ name: 'CSV', extensions: ['csv'] }]);
             if (filePath && typeof filePath === 'string') {
                 setCsvFilePath(filePath);
+
+                setIsValidating(true);
+                setValidationResult(null);
+                try {
+                    const result = await api.validateCsv(filePath);
+                    setValidationResult(result);
+                } catch (err: any) {
+                    setValidationResult({ valid: false, message: err.toString(), warnings: [] });
+                } finally {
+                    setIsValidating(false);
+                }
             }
         } catch (err) {
             console.error('Failed to select file:', err);
@@ -60,8 +84,23 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
         try {
             setIsSubmitting(true);
 
+            // 0. Update any changed vendor coefficients
+            for (const vendor of vendors) {
+                const newCoef = editedCoefficients[vendor.id];
+                if (newCoef !== undefined && newCoef !== vendor.cost_coefficient) {
+                    try {
+                        await api.updateVendor(vendor.id, {
+                            cost_coefficient: newCoef,
+                            min_price_margin: vendor.min_price_margin
+                        });
+                    } catch (e) {
+                        console.error('Failed to update vendor coeff', e);
+                    }
+                }
+            }
+
             // 1. Create Auction
-            await api.createAuction({
+            const auctionId = await api.createAuction({
                 name: auctionName,
                 vendor_id: selectedVendorId || undefined
             });
@@ -69,9 +108,7 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
             // 2. Import Manifest if selected
             if (csvFilePath) {
                 try {
-                    // Pass auctionId just in case backend gets updated to link it.
-                    // Currently importManifest might ignore it, but we satisfy the requirement "с привязкой к созданному auction ID"
-                    await api.importManifest(csvFilePath);
+                    await api.importManifest(csvFilePath, auctionId);
                 } catch (err) {
                     console.error('Failed to import manifest:', err);
                     // Decide if we should block success. Usually, we still consider auction created.
@@ -80,9 +117,9 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
 
             onSuccess();
             onOpenChange(false);
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to create auction:', err);
-            alert('Failed to create auction. Please try again.');
+            alert(`Failed to create auction: ${err}`);
         } finally {
             setIsSubmitting(false);
         }
@@ -123,22 +160,37 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
                         {/* Section 2: CSV Upload */}
                         <div className="space-y-2">
                             <label className="text-sm font-medium leading-none">
-                                Manyfastscan SCV
+                                Upload Manifest CSV
                             </label>
-                            <div className="flex items-center gap-2 mt-2">
-                                <Button
-                                    variant="outline"
-                                    type="button"
-                                    onClick={handleBrowseCsv}
-                                >
-                                    Browse
-                                </Button>
-                                <div className="flex-1 flex items-center gap-2 px-3 py-2 border rounded-md bg-muted/50 text-sm overflow-hidden text-ellipsis whitespace-nowrap">
-                                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                    <span className="text-muted-foreground truncate">
-                                        {csvFilePath ? csvFilePath.split('\\').pop()?.split('/').pop() : 'No file selected'}
-                                    </span>
+                            <div className="flex flex-col gap-2 mt-2">
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        type="button"
+                                        onClick={handleBrowseCsv}
+                                        disabled={isValidating}
+                                    >
+                                        {isValidating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                        Browse
+                                    </Button>
+                                    <div className="flex-1 flex items-center gap-2 px-3 py-2 border rounded-md bg-muted/50 text-sm overflow-hidden text-ellipsis whitespace-nowrap">
+                                        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                        <span className="text-muted-foreground truncate">
+                                            {csvFilePath ? csvFilePath.split('\\').pop()?.split('/').pop() : 'No file selected'}
+                                        </span>
+                                    </div>
                                 </div>
+                                {validationResult && (
+                                    <div className={`text-sm p-3 rounded-md border ${validationResult.valid ? 'bg-green-500/10 border-green-500/20 text-green-700 dark:text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400'}`}>
+                                        <div className="font-medium">{validationResult.valid ? 'Manifest Valid' : 'Invalid Manifest'}</div>
+                                        <div className="mt-1 opacity-90">{validationResult.message}</div>
+                                        {validationResult.warnings && validationResult.warnings.length > 0 && (
+                                            <ul className="mt-2 list-disc list-inside text-xs opacity-80">
+                                                {validationResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                                            </ul>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -165,8 +217,24 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
                                                 }`}
                                         >
                                             <div className="font-medium text-sm">{vendor.name}</div>
-                                            <div className="text-xs text-muted-foreground">
-                                                Cost = Retail &times; {vendor.cost_coefficient}
+                                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                                Cost = Retail &times;
+                                                <Input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0.01"
+                                                    max="0.99"
+                                                    className="w-16 h-6 px-1 py-0 text-xs inline-block"
+                                                    value={editedCoefficients[vendor.id] !== undefined ? editedCoefficients[vendor.id] : vendor.cost_coefficient}
+                                                    onChange={(e) => {
+                                                        const val = parseFloat(e.target.value);
+                                                        setEditedCoefficients(prev => ({
+                                                            ...prev,
+                                                            [vendor.id]: isNaN(val) ? 0 : val
+                                                        }));
+                                                    }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                />
                                             </div>
                                         </div>
                                     ))}

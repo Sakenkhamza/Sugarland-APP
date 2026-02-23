@@ -57,6 +57,7 @@ pub struct AuctionPnlRow {
 #[tauri::command]
 fn import_manifest(
     file_path: String,
+    auction_id: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<ManifestSummary, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -97,13 +98,14 @@ fn import_manifest(
         let (cost, min_price, _vendor) = pricing_engine.calculate_cost(retail_price, &source);
 
         let item_id = uuid::Uuid::new_v4().to_string();
+        let status = if auction_id.is_some() { "Listed" } else { "InStock" };
 
         db.conn
             .execute(
                 "INSERT INTO inventory_items
                  (id, manifest_id, lot_number, raw_title, vendor_code, source,
-                  retail_price, cost_price, min_price, quantity, current_status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'InStock')",
+                  retail_price, cost_price, min_price, quantity, current_status, auction_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     item_id,
                     manifest_id,
@@ -114,7 +116,9 @@ fn import_manifest(
                     retail_price,
                     cost,
                     min_price,
-                    row.quantity.parse::<i32>().unwrap_or(1)
+                    row.quantity.parse::<i32>().unwrap_or(1),
+                    status,
+                    auction_id.as_ref()
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -295,6 +299,14 @@ fn save_setting(
     Ok(())
 }
 
+#[tauri::command]
+fn save_binary_file(
+    file_path: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    std::fs::write(&file_path, data).map_err(|e| format!("Failed to save file: {}", e))
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -315,6 +327,7 @@ fn main() {
             db: Mutex::new(db),
         })
         .invoke_handler(tauri::generate_handler![
+            save_binary_file,
             import_manifest,
             get_inventory_items,
             get_dashboard_stats,
@@ -327,7 +340,6 @@ fn main() {
             // Auctions
             auctions::create_auction,
             auctions::get_auctions,
-            auctions::assign_items,
             auctions::export_auction_csv,
             auctions::get_auction_by_id,
             auctions::update_auction_status,

@@ -44,15 +44,22 @@ export const api = {
             const { save } = await import('@tauri-apps/plugin-dialog');
             return save({
                 defaultPath: defaultName,
-                filters: [{ name: 'CSV', extensions: ['csv'] }],
+                filters: [{ name: 'CSV', extensions: ['csv'] }, { name: 'Excel', extensions: ['xlsx'] }],
             });
         }
         return `C:\\mock\\exports\\${defaultName ?? 'export.csv'}`;
     },
 
+    saveBinaryFile: async (filePath: string, data: Uint8Array) => {
+        if (isTauri) {
+            return invokeCommand<void>('save_binary_file', { filePath, data: Array.from(data) });
+        }
+        console.log(`[Mock] Saving binary file to ${filePath}`);
+    },
+
     // Manifests & Inventory
-    importManifest: (file_path: string) =>
-        invokeCommand<ManifestSummary>('import_manifest', { filePath: file_path }),
+    importManifest: (file_path: string, auction_id?: string) =>
+        invokeCommand<ManifestSummary>('import_manifest', { filePath: file_path, auctionId: auction_id }),
 
     getInventoryItems: (status?: string) =>
         invokeCommand<InventoryItem[]>('get_inventory_items', { status }),
@@ -78,9 +85,6 @@ export const api = {
 
     updateVendor: (vendorId: string, data: { cost_coefficient: number; min_price_margin: number }) =>
         invokeCommand<void>('update_vendor', { vendorId, data }),
-
-    assignItemsToAuction: (auctionId: string, itemIds: string[]) =>
-        invokeCommand<number>('assign_items', { auctionId, itemIds }),
 
     exportAuctionCsv: (auctionId: string, filePath: string) =>
         invokeCommand<number>('export_auction_csv', { auctionId, filePath }),
