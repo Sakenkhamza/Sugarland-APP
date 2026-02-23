@@ -1,6 +1,6 @@
 // Database module — SQLite management with migrations and queries
 
-use rusqlite::{Connection, Result, params};
+use rusqlite::{Connection, Result};
 use serde::Serialize;
 
 pub struct Database {

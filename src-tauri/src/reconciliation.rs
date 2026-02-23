@@ -1,8 +1,7 @@
 use crate::db::Database;
 use crate::csv_parser;
 use rusqlite::Result;
-use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use serde::Serialize;
 use tauri::State;
 
 #[derive(Debug, Serialize)]

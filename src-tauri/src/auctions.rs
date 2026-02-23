@@ -1,8 +1,7 @@
-use crate::db::{Database, InventoryItemRow};
+use crate::db::Database;
 use crate::hibid;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use tauri::State;
 use uuid::Uuid;
 
