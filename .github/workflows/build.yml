@@ -41,6 +41,14 @@ jobs:
         run: |
           npm install
 
+      - name: Verify Secrets
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PASS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEY" ]; then echo "Missing TAURI_SIGNING_PRIVATE_KEY!"; else echo "KEY is set. Length: ${#KEY}"; fi
+          if [ -z "$PASS" ]; then echo "Missing TAURI_SIGNING_PRIVATE_KEY_PASSWORD!"; else echo "PASS is set. Length: ${#PASS}"; fi
+
       - name: Build Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
