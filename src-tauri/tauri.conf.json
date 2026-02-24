@@ -1,7 +1,7 @@
 {
     "$schema": "https://raw.githubusercontent.com/nicerdicer/tauri/dev/tooling/cli/schema.json",
     "productName": "Sugarland",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "identifier": "com.sugarland",
     "build": {
         "frontendDist": "../dist",
@@ -39,5 +39,13 @@
             "icons/icon.icns",
             "icons/icon.ico"
         ]
+    },
+    "plugins": {
+        "updater": {
+            "endpoints": [
+                "https://sakenkhamza.github.io/Sugarland-APP/updater.json"
+            ],
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUwNjA3MkE5ODU5RjYzRDYKUldUV1k1K0ZxWEpnVUVmSEZ3VG9FTnNQSlhnK0s2T1c4QWR1bkZoZEtVYkFKQTdLQU83QWRLZ08K"
+        }
     }
 }
