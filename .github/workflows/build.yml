@@ -42,6 +42,7 @@ jobs:
           npm install
 
       - name: Verify Secrets
+        shell: bash
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           PASS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
