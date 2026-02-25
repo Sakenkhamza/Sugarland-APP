@@ -1,0 +1,11 @@
+{
+  "version": "0.1.10",
+  "notes": "See the assets to download this version and install.",
+  "pub_date": "2026-02-25T10:08:13Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1k1K0ZxWEpnVUlOamQrZmdYZHRta05PWkJoZjZWUWh4STFmNEJlWGpHTWR5UDVsbGd5b3VsSk5ydmFuN21Fb1JVMWhvWVhWWHllM3YwSi95UEttR0FxenpjNFFsckFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzcyMDE0MTM3CWZpbGU6U3VnYXJsYW5kLmFwcC50YXIuZ3oKa05KODNNMkl4dUZPNEZZY09lTHBxUWs4OWNCaWVDUHBYRkJRWGlqZkpxZG5zRGtQa1FYZE9iMFg1Zi9yQUJxbVREN3d4dlhTMkVEaFo3ak1IVW5vQlE9PQo=",
+      "url": "https://github.com/Sakenkhamza/Sugarland-APP/releases/download/v0.1.10/Sugarland_aarch64.app.tar.gz"
+    }
+  }
+}
