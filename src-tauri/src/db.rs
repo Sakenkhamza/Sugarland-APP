@@ -303,6 +303,9 @@ impl Database {
             ",
         )?;
 
+        // Simple migration: Add vendor_id to auctions if it doesn't exist
+        let _ = self.conn.execute("ALTER TABLE auctions ADD COLUMN vendor_id TEXT", []);
+
         // Seed settings
         self.conn.execute_batch(
             "
