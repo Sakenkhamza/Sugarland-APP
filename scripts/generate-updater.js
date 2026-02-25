@@ -64,12 +64,13 @@ async function main() {
         const url = asset.browser_download_url;
 
         // Detect platforms
-        const isWindows = name.endsWith('.nsis.zip.sig');
+        const isWindowsExe = name.endsWith('-setup.exe.sig');
+        const isWindowsMsi = name.endsWith('.msi.sig');
         const isMacIntel = name.endsWith('x86_64.app.tar.gz.sig');
         const isMacArm = name.endsWith('aarch64.app.tar.gz.sig') || name.endsWith('arm64.app.tar.gz.sig');
         const isMacUniversal = name.endsWith('universal.app.tar.gz.sig');
 
-        if (!isWindows && !isMacIntel && !isMacArm && !isMacUniversal) continue;
+        if (!isWindowsExe && !isWindowsMsi && !isMacIntel && !isMacArm && !isMacUniversal) continue;
 
         // Fetch the signature content
         const sigUrl = url;
@@ -105,7 +106,10 @@ async function main() {
             url: originalAssetUrl
         };
 
-        if (isWindows) {
+        // For Windows, default to exe (NSIS) over MSI to avoid overriding unless needed.
+        if (isWindowsExe) {
+            updater.platforms['windows-x86_64'] = platformData;
+        } else if (isWindowsMsi && !updater.platforms['windows-x86_64']) {
             updater.platforms['windows-x86_64'] = platformData;
         } else if (isMacIntel) {
             updater.platforms['darwin-x86_64'] = platformData;
