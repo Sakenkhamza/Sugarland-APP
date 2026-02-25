@@ -1,4 +1,6 @@
 import { NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import {
     LayoutDashboard,
     Upload,
@@ -23,6 +25,12 @@ const navigation = [
 ];
 
 export function Sidebar() {
+    const [appVersion, setAppVersion] = useState<string>('0.1.0');
+
+    useEffect(() => {
+        getVersion().then((version) => setAppVersion(version)).catch(console.error);
+    }, []);
+
     return (
         <aside className="flex h-screen w-64 flex-col border-r bg-card/50 backdrop-blur-sm">
             {/* Logo */}
@@ -63,7 +71,7 @@ export function Sidebar() {
 
             {/* Footer */}
             <div className="px-6 py-4">
-                <p className="text-xs text-muted-foreground">v0.1.0 — Phase 1 MVP</p>
+                <p className="text-xs text-muted-foreground">v{appVersion} — Phase 1 MVP</p>
             </div>
         </aside>
     );
