@@ -7,10 +7,13 @@ import { ask } from '@tauri-apps/plugin-dialog';
 
 export function AppLayout() {
     useEffect(() => {
-        // Run update check on mount
-        const checkForUpdates = async () => {
+        // Run update check on mount (with a small delay to let the app fully initialize)
+        const timer = setTimeout(async () => {
             try {
+                console.log('[Updater] Checking for updates...');
                 const update = await check();
+                console.log('[Updater] Check result:', update);
+
                 if (update) {
                     // Ask user if they want to install
                     const yes = await ask(`Version ${update.version} is available! Do you want to download and install it now?\n\nRelease notes:\n${update.body}`, {
@@ -23,14 +26,16 @@ export function AppLayout() {
                         await update.downloadAndInstall();
                         // App will automatically restart after installation
                     }
+                } else {
+                    console.log('[Updater] No updates available.');
                 }
-            } catch (err) {
-                console.error('Failed to check for updates:', err);
-                // Don't show toast for check failures to avoid annoying users if they are offline
+            } catch (err: unknown) {
+                console.error('[Updater] Failed to check for updates:', err);
+                toast.error(`Update check failed: ${err instanceof Error ? err.message : String(err)}`);
             }
-        };
+        }, 3000);
 
-        checkForUpdates();
+        return () => clearTimeout(timer);
     }, []);
 
     return (
