@@ -341,11 +341,14 @@ fn main() {
             // Auctions
             auctions::create_auction,
             auctions::get_auctions,
-            auctions::export_auction_csv,
             auctions::get_auction_by_id,
             auctions::update_auction_status,
             auctions::update_vendor,
             auctions::unassign_item,
+            auctions::finish_auction,
+            auctions::get_auction_reports,
+            auctions::get_all_auction_reports,
+            auctions::open_report_file,
             // Reconciliation
             reconciliation::reconcile_auction,
             reconciliation::get_pl_report,

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import type { Auction, InventoryItem } from '@/types';
-import { ArrowLeft, Download, X, Search, CheckCircle2, FileSpreadsheet } from 'lucide-react';
+import { ArrowLeft, X, Search, Flag, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrencyWhole } from '@/lib/utils';
 import { toast } from 'sonner';
 
 export function AuctionDetailPage() {
@@ -58,46 +58,45 @@ export function AuctionDetailPage() {
         }
     };
 
-    const handleUpdateStatus = async (newStatus: string) => {
+    const handleFinish = async () => {
         if (!auction) return;
+
+        // 1. Prompt user to select the HiBid results CSV file
+        const filePath = await api.selectFile([
+            { name: 'CSV Files', extensions: ['csv'] }
+        ]);
+
+        if (!filePath) {
+            toast.info('No file selected — auction not finished');
+            return;
+        }
+
+        // 2. Call finish with the selected CSV
         setIsUpdatingStatus(true);
         try {
-            await api.updateAuctionStatus(auction.id, newStatus);
-            setAuction({ ...auction, status: newStatus as any });
-            toast.success(`Auction marked as ${newStatus}`);
+            const result = await api.finishAuction(auction.id, filePath as string);
+            setAuction({ ...auction, status: 'Completed' as any });
+            toast.success(`Auction finished! Reports generated: ${result.detail_report}, ${result.summary_report}`);
         } catch (error) {
-            console.error('Failed to update status:', error);
-            toast.error('Failed to update status');
+            console.error('Failed to finish auction:', error);
+            toast.error('Failed to finish auction: ' + String(error));
         } finally {
             setIsUpdatingStatus(false);
         }
     };
 
-    const handleExportCsv = async () => {
-        if (!auction) return;
-        try {
-            const defaultName = `${auction.name.replace(/\s+/g, '_')}_lots.csv`;
-            const savePath = await api.saveFile(defaultName);
-            if (!savePath) return; // User cancelled
 
-            await api.exportAuctionCsv(auction.id, savePath as string);
-            toast.success(`Exported lots to ${savePath}`);
-        } catch (error) {
-            console.error('Failed to export CSV:', error);
-            toast.error('Failed to export CSV');
-        }
-    };
 
     const handleExportExcel = async () => {
         if (!auction || auctionItems.length === 0) return;
         try {
             const formattedData = auctionItems.map((item) => {
-                const retail = item.retail_price || 0;
-                const cost = item.cost_price || 0;
-                const min_price = item.min_price || 0;
+                const retail = Math.round(item.retail_price || 0);
+                const cost = Math.round(item.cost_price || 0);
+                const min_price = Math.ceil(item.min_price || 0);
 
-                const cost_pct = retail > 0 ? parseFloat((cost / retail).toFixed(4)) : 0;
-                const min_pr_10_pct = retail * 0.10;
+                const cost_pct = (item.retail_price || 0) > 0 ? Math.round(((item.cost_price || 0) / (item.retail_price || 1)) * 100) : 0;
+                const min_pr_10_pct = Math.round((item.retail_price || 0) * 0.10);
 
                 return {
                     'Auction name': auction.name,
@@ -107,7 +106,7 @@ export function AuctionDetailPage() {
                     'Vendor Code': item.source === 'Best Buy' ? 'ATXSUGAR' : '',
                     'Retail Price': retail,
                     'Source': item.source || '',
-                    'cost': cost_pct,
+                    'cost': cost_pct + '%',
                     'cost price': cost,
                     'Retail price': retail,
                     '% min pr (+10%)': min_pr_10_pct,
@@ -165,10 +164,8 @@ export function AuctionDetailPage() {
 
     const getStatusColor = (status: string) => {
         switch (status) {
-            case 'Draft': return 'bg-gray-500/15 text-gray-700 dark:text-gray-300';
             case 'Active': return 'bg-blue-500/15 text-blue-700 dark:text-blue-300';
             case 'Completed': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300';
-            case 'Cancelled': return 'bg-red-500/15 text-red-700 dark:text-red-300';
             default: return 'bg-gray-500/15 text-gray-700 dark:text-gray-300';
         }
     };
@@ -191,44 +188,26 @@ export function AuctionDetailPage() {
                     </div>
                 </div>
                 <div className="flex gap-2">
-                    {auction.status === 'Draft' && (
-                        <Button
-                            variant="default"
-                            onClick={() => handleUpdateStatus('Active')}
-                            disabled={isUpdatingStatus}
-                        >
-                            Activate
-                        </Button>
-                    )}
                     {auction.status === 'Active' && (
                         <Button
                             variant="default"
-                            onClick={() => handleUpdateStatus('Completed')}
+                            onClick={handleFinish}
                             disabled={isUpdatingStatus}
                             className="bg-emerald-600 hover:bg-emerald-700"
                         >
-                            <CheckCircle2 className="mr-2 h-4 w-4" />
-                            Mark Completed
+                            <Flag className="mr-2 h-4 w-4" />
+                            {isUpdatingStatus ? 'Finishing...' : 'Finish'}
                         </Button>
                     )}
-                    {['Draft', 'Active', 'Completed'].includes(auction.status) && (
+                    {['Active', 'Completed'].includes(auction.status) && (
                         <>
-                            <Button
-                                variant="outline"
-                                onClick={handleExportCsv}
-                                disabled={auctionItems.length === 0}
-                            >
-                                <Download className="mr-2 h-4 w-4" />
-                                Export CSV
-                            </Button>
                             <Button
                                 variant="outline"
                                 onClick={handleExportExcel}
                                 disabled={auctionItems.length === 0}
-                                className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 dark:text-emerald-400 dark:border-emerald-800 dark:hover:bg-emerald-950/50"
+                                className="text-emerald-600 border-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 w-9 px-0"
                             >
-                                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                                Export Excel
+                                <FileSpreadsheet className="h-4 w-4" />
                             </Button>
                         </>
                     )}
@@ -250,7 +229,7 @@ export function AuctionDetailPage() {
                         <CardTitle className="text-sm font-medium text-muted-foreground">Total Retail</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold text-emerald-600">{formatCurrency(totalRetail)}</div>
+                        <div className="text-2xl font-bold text-emerald-600">{formatCurrencyWhole(totalRetail)}</div>
                     </CardContent>
                 </Card>
                 <Card>
@@ -258,7 +237,7 @@ export function AuctionDetailPage() {
                         <CardTitle className="text-sm font-medium text-muted-foreground">Est. Revenue</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold text-blue-600">{formatCurrency(estRevenue)}</div>
+                        <div className="text-2xl font-bold text-blue-600">{formatCurrencyWhole(estRevenue)}</div>
                     </CardContent>
                 </Card>
             </div>
@@ -348,16 +327,16 @@ export function AuctionDetailPage() {
                                         <TableCell className="text-muted-foreground text-xs font-mono">
                                             {item.source === 'Best Buy' ? 'ATXSUGAR' : '-'}
                                         </TableCell>
-                                        <TableCell className="text-right font-medium">{formatCurrency(item.retail_price || 0)}</TableCell>
+                                        <TableCell className="text-right font-medium">{formatCurrencyWhole(item.retail_price || 0)}</TableCell>
                                         <TableCell className="text-right text-muted-foreground text-xs">
-                                            {item.retail_price ? (((item.cost_price || 0) / item.retail_price) * 100).toFixed(1) + '%' : '0%'}
+                                            {item.retail_price ? Math.round(((item.cost_price || 0) / item.retail_price) * 100) + '%' : '0%'}
                                         </TableCell>
-                                        <TableCell className="text-right">{formatCurrency(item.cost_price || 0)}</TableCell>
+                                        <TableCell className="text-right">{formatCurrencyWhole(item.cost_price || 0)}</TableCell>
                                         <TableCell className="text-right text-muted-foreground text-xs">
-                                            {formatCurrency((item.retail_price || 0) * 0.10)}
+                                            {formatCurrencyWhole((item.retail_price || 0) * 0.10)}
                                         </TableCell>
                                         <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400">
-                                            {formatCurrency(item.min_price || 0)}
+                                            {formatCurrencyWhole(Math.ceil(item.min_price || 0))}
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant="secondary" className={getStatusColor(item.current_status)}>

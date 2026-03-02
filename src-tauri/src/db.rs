@@ -55,7 +55,8 @@ impl Database {
              PRAGMA foreign_keys=ON;
              PRAGMA busy_timeout=5000;
              PRAGMA synchronous=NORMAL;
-             PRAGMA cache_size=-64000;",
+             PRAGMA cache_size=-64000;
+             PRAGMA ignore_check_constraints=ON;",
         )?;
 
         let db = Self { conn };
@@ -98,10 +99,21 @@ impl Database {
                 vendor_id TEXT,
                 start_date DATETIME,
                 end_date DATETIME,
-                status TEXT CHECK(status IN ('Draft', 'Active', 'Completed', 'Cancelled')) DEFAULT 'Draft',
+                status TEXT CHECK(status IN ('Active', 'Completed')) DEFAULT 'Active',
                 total_lots INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- Auction Reports (generated Excel files)
+            CREATE TABLE IF NOT EXISTS auction_reports (
+                id TEXT PRIMARY KEY,
+                auction_id TEXT NOT NULL REFERENCES auctions(id),
+                report_type TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_auction_reports_auction ON auction_reports(auction_id);
 
             -- Inventory Items
             CREATE TABLE IF NOT EXISTS inventory_items (
@@ -129,7 +141,7 @@ impl Database {
                 min_price REAL NOT NULL CHECK(min_price >= 0),
 
                 -- Status
-                current_status TEXT CHECK(current_status IN ('InStock', 'Listed', 'Sold', 'Buyback', 'Scrap')) DEFAULT 'InStock',
+                current_status TEXT CHECK(current_status IN ('InStock', 'Listed', 'Sold', 'Unsold', 'Buyback', 'Scrap')) DEFAULT 'InStock',
 
                 -- Auction
                 auction_id TEXT REFERENCES auctions(id),
@@ -305,6 +317,36 @@ impl Database {
 
         // Simple migration: Add vendor_id to auctions if it doesn't exist
         let _ = self.conn.execute("ALTER TABLE auctions ADD COLUMN vendor_id TEXT", []);
+
+        // Migration: convert Draft/Cancelled auctions to Active
+        let _ = self.conn.execute(
+            "UPDATE auctions SET status = 'Active' WHERE status IN ('Draft', 'Cancelled')",
+            [],
+        );
+
+        // Migration: Add 'Unsold' to inventory_items current_status CHECK constraint
+        // Use PRAGMA writable_schema to directly patch the constraint (avoids trigger/view issues)
+        let has_unsold: bool = self.conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_items'",
+            [],
+            |row| {
+                let sql: String = row.get(0)?;
+                Ok(sql.contains("Unsold"))
+            },
+        ).unwrap_or(true);
+
+        if !has_unsold {
+            log::info!("Running migration: adding 'Unsold' to inventory_items CHECK constraint");
+            let _ = self.conn.execute_batch("
+                PRAGMA writable_schema = ON;
+                UPDATE sqlite_master
+                SET sql = replace(sql, '''Sold'', ''Buyback''', '''Sold'', ''Unsold'', ''Buyback''')
+                WHERE type = 'table' AND name = 'inventory_items';
+                PRAGMA writable_schema = OFF;
+            ");
+            // Verify integrity
+            let _ = self.conn.execute_batch("PRAGMA integrity_check;");
+        }
 
         // Seed settings
         self.conn.execute_batch(

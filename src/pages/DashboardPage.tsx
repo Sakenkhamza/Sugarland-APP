@@ -88,21 +88,11 @@ export function DashboardPage() {
 
     return (
         <div className="space-y-8 animate-fade-in">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Overview of your liquidation business
-                    </p>
-                </div>
-                <div className="flex gap-3">
-                    <Button variant="outline" onClick={() => loadData()}>
-                        Refresh
-                    </Button>
-                    <Button onClick={() => navigate('/import')}>
-                        Import Manifest
-                    </Button>
-                </div>
+            <div>
+                <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+                <p className="text-muted-foreground mt-1">
+                    Overview of your liquidation business
+                </p>
             </div>
 
             {/* KPI Cards */}

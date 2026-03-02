@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { Auction } from '@/types';
-import { Plus, Download, Calendar } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Plus, FileSpreadsheet, Calendar } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,12 +42,49 @@ export function AuctionsPage() {
     };
     const handleExport = async (auction: Auction) => {
         try {
-            const defaultName = `${auction.name.replace(/\s+/g, '_')}_lots.csv`;
+            // Fetch all items for this auction
+            const allItems = await api.getInventoryItems();
+            const auctionItems = allItems.filter(item => item.auction_id === auction.id);
+
+            if (auctionItems.length === 0) {
+                toast.error('No items found for this auction');
+                return;
+            }
+
+            const formattedData = auctionItems.map((item) => {
+                const retail = Math.round(item.retail_price || 0);
+                const cost = Math.round(item.cost_price || 0);
+                const min_price = Math.ceil(item.min_price || 0);
+                const cost_pct = (item.retail_price || 0) > 0 ? Math.round(((item.cost_price || 0) / (item.retail_price || 1)) * 100) : 0;
+                const min_pr_10_pct = Math.round((item.retail_price || 0) * 0.10);
+
+                return {
+                    'Auction name': auction.name,
+                    'LotNumber': item.lot_number || '',
+                    'Quantity': 1,
+                    'Title': item.raw_title || '',
+                    'Vendor Code': item.source === 'Best Buy' ? 'ATXSUGAR' : '',
+                    'Retail Price': retail,
+                    'Source': item.source || '',
+                    'cost': cost_pct + '%',
+                    'cost price': cost,
+                    'Retail price': retail,
+                    '% min pr (+10%)': min_pr_10_pct,
+                    'min price': min_price
+                };
+            });
+
+            const worksheet = XLSX.utils.json_to_sheet(formattedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+            const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+
+            const defaultName = `${auction.name.replace(/\s+/g, '_')}_Manager_Report.xlsx`;
             const savePath = await api.saveFile(defaultName);
             if (!savePath) return;
 
-            await api.exportAuctionCsv(auction.id, savePath as string);
-            toast.success(`Exported ${auction.name} to CSV`);
+            await api.saveBinaryFile(savePath as string, new Uint8Array(excelBuffer));
+            toast.success(`Exported ${auction.name} to Excel`);
         } catch (err) {
             console.error('Export failed:', err);
             toast.error('Export failed');
@@ -55,10 +93,8 @@ export function AuctionsPage() {
 
     const getStatusColor = (status: string) => {
         switch (status) {
-            case 'Draft': return 'bg-gray-500/15 text-gray-700 dark:text-gray-300';
             case 'Active': return 'bg-blue-500/15 text-blue-700 dark:text-blue-300';
             case 'Completed': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300';
-            case 'Cancelled': return 'bg-red-500/15 text-red-700 dark:text-red-300';
             default: return 'bg-gray-500/15 text-gray-700 dark:text-gray-300';
         }
     };
@@ -87,15 +123,7 @@ export function AuctionsPage() {
             />
 
             {auctions.length > 0 && (
-                <div className="grid gap-4 md:grid-cols-3">
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="text-2xl font-bold">
-                                {auctions.filter(a => a.status === 'Draft').length}
-                            </div>
-                            <p className="text-sm text-muted-foreground">Draft</p>
-                        </CardContent>
-                    </Card>
+                <div className="grid gap-4 md:grid-cols-2">
                     <Card>
                         <CardContent className="pt-6">
                             <div className="text-2xl font-bold text-blue-600">
@@ -170,9 +198,13 @@ export function AuctionsPage() {
                                         </TableCell>
                                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                                             <div className="flex justify-end gap-2">
-                                                <Button variant="outline" size="sm" onClick={() => handleExport(auction)}>
-                                                    <Download className="h-4 w-4 mr-1" />
-                                                    CSV
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 w-9 px-0"
+                                                    onClick={() => handleExport(auction)}
+                                                >
+                                                    <FileSpreadsheet className="h-4 w-4" />
                                                 </Button>
                                             </div>
                                         </TableCell>

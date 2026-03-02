@@ -78,7 +78,7 @@ export interface Auction {
     created_at: string;
 }
 
-export type AuctionStatus = 'Draft' | 'Active' | 'Completed' | 'Cancelled';
+export type AuctionStatus = 'Active' | 'Completed';
 
 // --- Auction Result ---
 export interface AuctionResult {
@@ -240,4 +240,20 @@ export interface ValidationResult {
     valid: boolean;
     message: string;
     warnings: string[];
+}
+
+// --- Auction Reports ---
+export interface AuctionReport {
+    id: string;
+    auction_id: string;
+    auction_name: string;
+    report_type: 'detail' | 'summary';
+    file_name: string;
+    file_path: string;
+    created_at: string;
+}
+
+export interface FinishAuctionResult {
+    detail_report: string;
+    summary_report: string;
 }

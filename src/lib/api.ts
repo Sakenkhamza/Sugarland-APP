@@ -10,7 +10,9 @@ import type {
     ProfitLossReport,
     AuctionPnlRow,
     ItemStatus,
-    ValidationResult
+    ValidationResult,
+    FinishAuctionResult,
+    AuctionReport,
 } from '@/types';
 
 // Wrap invoke to handle mock mode if backend is not available (for dev without Rust)
@@ -42,9 +44,12 @@ export const api = {
     saveFile: async (defaultName?: string) => {
         if (isTauri) {
             const { save } = await import('@tauri-apps/plugin-dialog');
+            const isExcel = defaultName?.endsWith('.xlsx');
             return save({
                 defaultPath: defaultName,
-                filters: [{ name: 'CSV', extensions: ['csv'] }, { name: 'Excel', extensions: ['xlsx'] }],
+                filters: isExcel
+                    ? [{ name: 'Excel', extensions: ['xlsx'] }, { name: 'CSV', extensions: ['csv'] }]
+                    : [{ name: 'CSV', extensions: ['csv'] }, { name: 'Excel', extensions: ['xlsx'] }],
             });
         }
         return `C:\\mock\\exports\\${defaultName ?? 'export.csv'}`;
@@ -86,8 +91,6 @@ export const api = {
     updateVendor: (vendorId: string, data: { cost_coefficient: number; min_price_margin: number }) =>
         invokeCommand<void>('update_vendor', { vendorId, data }),
 
-    exportAuctionCsv: (auctionId: string, filePath: string) =>
-        invokeCommand<number>('export_auction_csv', { auctionId, filePath }),
 
     // Reconciliation
     reconcileAuction: (auctionId: string, filePath: string) =>
@@ -115,6 +118,19 @@ export const api = {
 
     validateCsv: (filePath: string) =>
         invokeCommand<ValidationResult>('validate_csv', { filePath }),
+
+    // Finish Auction & Reports
+    finishAuction: (auctionId: string, resultsCsvPath: string) =>
+        invokeCommand<FinishAuctionResult>('finish_auction', { auctionId, resultsCsvPath }),
+
+    getAuctionReports: (auctionId: string) =>
+        invokeCommand<AuctionReport[]>('get_auction_reports', { auctionId }),
+
+    getAllAuctionReports: () =>
+        invokeCommand<AuctionReport[]>('get_all_auction_reports'),
+
+    openReportFile: (filePath: string) =>
+        invokeCommand<void>('open_report_file', { filePath }),
 };
 
 // ----------------------------------------------------------------------------
@@ -155,12 +171,12 @@ function mockResponse(cmd: string): any {
             }));
         case 'get_auctions':
             return [
-                { id: '1', name: 'Weekly Auction #45', status: 'Draft', total_lots: 0, created_at: new Date().toISOString() },
+                { id: '1', name: 'Weekly Auction #45', status: 'Active', total_lots: 0, created_at: new Date().toISOString() },
                 { id: '2', name: 'Electronics Clearance', status: 'Active', total_lots: 50, created_at: new Date().toISOString() },
                 { id: '3', name: 'Furniture Liquidation', status: 'Completed', total_lots: 120, created_at: new Date().toISOString() },
             ];
         case 'get_auction_by_id':
-            return { id: '1', name: 'Weekly Auction #45', status: 'Draft', total_lots: 0, created_at: new Date().toISOString() };
+            return { id: '1', name: 'Weekly Auction #45', status: 'Active', total_lots: 0, created_at: new Date().toISOString() };
         case 'update_auction_status':
         case 'update_vendor':
             return null;

@@ -66,8 +66,7 @@ impl PricingEngine {
         match vendor {
             Some(v) => {
                 let cost = (retail_price * v.cost_coefficient * 100.0).round() / 100.0;
-                let min_price =
-                    ((cost + retail_price * v.min_price_margin) * 100.0).round() / 100.0;
+                let min_price = (cost + retail_price * v.min_price_margin).ceil();
                 (cost, min_price, v.name.clone())
             }
             None => (0.0, 0.0, "Unknown".to_string()),
@@ -125,7 +124,7 @@ mod tests {
 
         assert_eq!(vendor, "Best Buy");
         assert_eq!(cost, 447.86);
-        assert_eq!(min_price, 767.76);
+        assert_eq!(min_price, 768.0);
     }
 
     #[test]

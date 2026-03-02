@@ -12,6 +12,14 @@ export function formatCurrency(value: number): string {
   }).format(value || 0);
 }
 
+export function formatCurrencyWhole(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+}
+
 export function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US').format(value || 0);
 }

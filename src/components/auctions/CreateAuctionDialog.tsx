@@ -219,22 +219,25 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
                                             <div className="font-medium text-sm">{vendor.name}</div>
                                             <div className="text-xs text-muted-foreground flex items-center gap-1">
                                                 Cost = Retail &times;
-                                                <Input
-                                                    type="number"
-                                                    step="0.01"
-                                                    min="0.01"
-                                                    max="0.99"
-                                                    className="w-16 h-6 px-1 py-0 text-xs inline-block"
-                                                    value={editedCoefficients[vendor.id] !== undefined ? editedCoefficients[vendor.id] : vendor.cost_coefficient}
-                                                    onChange={(e) => {
-                                                        const val = parseFloat(e.target.value);
-                                                        setEditedCoefficients(prev => ({
-                                                            ...prev,
-                                                            [vendor.id]: isNaN(val) ? 0 : val
-                                                        }));
-                                                    }}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                />
+                                                <div className="flex items-center gap-0.5">
+                                                    <Input
+                                                        type="number"
+                                                        step="1"
+                                                        min="1"
+                                                        max="100"
+                                                        className="w-12 h-6 px-1 py-0 text-xs inline-block text-center"
+                                                        value={editedCoefficients[vendor.id] !== undefined ? Math.round(editedCoefficients[vendor.id] * 100) : Math.round(vendor.cost_coefficient * 100)}
+                                                        onChange={(e) => {
+                                                            const val = parseFloat(e.target.value);
+                                                            setEditedCoefficients(prev => ({
+                                                                ...prev,
+                                                                [vendor.id]: isNaN(val) ? 0 : val / 100
+                                                            }));
+                                                        }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    />
+                                                    <span>%</span>
+                                                </div>
                                             </div>
                                         </div>
                                     ))}

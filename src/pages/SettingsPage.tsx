@@ -103,40 +103,40 @@ export function SettingsPage() {
                                         </Badge>
                                     </div>
                                     <p className="text-xs text-muted-foreground mt-1">
-                                        Cost = Retail × {vendor.cost_coefficient} ({vendor.cost_coefficient * 100}%)
+                                        Cost = Retail × {vendor.cost_coefficient} ({Math.round(vendor.cost_coefficient * 100)}%)
                                     </p>
                                 </div>
                                 <div className="flex gap-3">
                                     <div className="text-center">
-                                        <p className="text-xs text-muted-foreground mb-1">Coefficient</p>
+                                        <p className="text-xs text-muted-foreground mb-1">Coefficient (%)</p>
                                         <Input
                                             className="w-24 text-center font-mono"
-                                            value={vendorEdits[vendor.id]?.cost_coefficient ?? vendor.cost_coefficient}
+                                            value={Math.round((vendorEdits[vendor.id]?.cost_coefficient ?? vendor.cost_coefficient) * 100)}
                                             onChange={(e) => setVendorEdits(prev => ({
                                                 ...prev,
                                                 [vendor.id]: {
                                                     ...(prev[vendor.id] || vendor),
-                                                    cost_coefficient: parseFloat(e.target.value) || 0
+                                                    cost_coefficient: (parseFloat(e.target.value) || 0) / 100
                                                 }
                                             }))}
                                             type="number"
-                                            step="0.01"
+                                            step="1"
                                         />
                                     </div>
                                     <div className="text-center">
-                                        <p className="text-xs text-muted-foreground mb-1">Min Margin</p>
+                                        <p className="text-xs text-muted-foreground mb-1">Min Margin (%)</p>
                                         <Input
                                             className="w-24 text-center font-mono"
-                                            value={vendorEdits[vendor.id]?.min_price_margin ?? vendor.min_price_margin}
+                                            value={Math.round((vendorEdits[vendor.id]?.min_price_margin ?? vendor.min_price_margin) * 100)}
                                             onChange={(e) => setVendorEdits(prev => ({
                                                 ...prev,
                                                 [vendor.id]: {
                                                     ...(prev[vendor.id] || vendor),
-                                                    min_price_margin: parseFloat(e.target.value) || 0
+                                                    min_price_margin: (parseFloat(e.target.value) || 0) / 100
                                                 }
                                             }))}
                                             type="number"
-                                            step="0.01"
+                                            step="1"
                                         />
                                     </div>
                                 </div>

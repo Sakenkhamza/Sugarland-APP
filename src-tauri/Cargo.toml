@@ -1,6 +1,6 @@
 [package]
 name = "sugarland"
-version = "0.1.0"
+version = "0.1.15"
 description = "Sugarland — Liquidation Management Platform"
 authors = ["Sugarland Team"]
 edition = "2021"
@@ -24,6 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
+rust_xlsxwriter = "0.79"
 
 [features]
 default = ["custom-protocol"]

@@ -88,14 +88,17 @@ pub fn normalize_source(source: &Option<String>) -> String {
 
 #[derive(Debug, Deserialize)]
 pub struct HiBidResultRow {
-    #[serde(rename = "Lot #", default)]
+    #[serde(rename = "Lot", default)]
     pub lot_number: String,
 
-    #[serde(rename = "Winning Bidder", default)]
-    pub winning_bidder: String,
+    #[serde(rename = "Title", default)]
+    pub title: Option<String>,
 
-    #[serde(rename = "Bidder ID", default)]
+    #[serde(rename = "Winning Bidder", default)]
     pub bidder_id: String,
+
+    #[serde(rename = "Name", default)]
+    pub winning_bidder: String,
 
     #[serde(rename = "High Bid", default)]
     pub high_bid: String,
