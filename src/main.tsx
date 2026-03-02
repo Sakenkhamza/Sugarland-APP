@@ -10,23 +10,26 @@ import { ReconciliationPage } from '@/pages/ReconciliationPage';
 import { ReportsPage } from '@/pages/ReportsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AuctionDetailPage } from '@/pages/AuctionDetailPage';
+import { UpdateGuard } from '@/components/layout/UpdateGuard';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
-        <BrowserRouter>
-            <Routes>
-                <Route element={<AppLayout />}>
-                    <Route path="/" element={<DashboardPage />} />
-                    <Route path="/import" element={<ImportPage />} />
-                    <Route path="/inventory" element={<InventoryPage />} />
-                    <Route path="/auctions" element={<AuctionsPage />} />
-                    <Route path="/auctions/:id" element={<AuctionDetailPage />} />
-                    <Route path="/reconciliation" element={<ReconciliationPage />} />
-                    <Route path="/reports" element={<ReportsPage />} />
-                    <Route path="/settings" element={<SettingsPage />} />
-                </Route>
-            </Routes>
-        </BrowserRouter>
+        <UpdateGuard>
+            <BrowserRouter>
+                <Routes>
+                    <Route element={<AppLayout />}>
+                        <Route path="/" element={<DashboardPage />} />
+                        <Route path="/import" element={<ImportPage />} />
+                        <Route path="/inventory" element={<InventoryPage />} />
+                        <Route path="/auctions" element={<AuctionsPage />} />
+                        <Route path="/auctions/:id" element={<AuctionDetailPage />} />
+                        <Route path="/reconciliation" element={<ReconciliationPage />} />
+                        <Route path="/reports" element={<ReportsPage />} />
+                        <Route path="/settings" element={<SettingsPage />} />
+                    </Route>
+                </Routes>
+            </BrowserRouter>
+        </UpdateGuard>
     </StrictMode>
 );
