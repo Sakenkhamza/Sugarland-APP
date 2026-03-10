@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { FileText, Loader2, X } from 'lucide-react';
 import { api } from '@/lib/api';
-import type { Vendor, ValidationResult } from '@/types';
+import type { ValidationResult } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -15,46 +15,20 @@ interface CreateAuctionDialogProps {
 export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuctionDialogProps) {
     const [auctionName, setAuctionName] = useState('');
     const [csvFilePath, setCsvFilePath] = useState<string | null>(null);
-    const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
-    const [vendors, setVendors] = useState<Vendor[]>([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [isLoadingVendors, setIsLoadingVendors] = useState(false);
     const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
     const [isValidating, setIsValidating] = useState(false);
-    const [editedCoefficients, setEditedCoefficients] = useState<Record<string, number>>({});
 
     useEffect(() => {
         if (open) {
-            loadVendors();
             // Reset state
             setAuctionName('');
             setCsvFilePath(null);
-            setSelectedVendorId(null);
             setIsSubmitting(false);
             setValidationResult(null);
             setIsValidating(false);
         }
     }, [open]);
-
-    const loadVendors = async () => {
-        try {
-            setIsLoadingVendors(true);
-            const data = await api.getVendors();
-            const activeVendors = data.filter(v => v.is_active);
-            setVendors(activeVendors);
-
-            // Initialize edited coefficients
-            const coefs: Record<string, number> = {};
-            activeVendors.forEach(v => {
-                coefs[v.id] = v.cost_coefficient;
-            });
-            setEditedCoefficients(coefs);
-        } catch (err) {
-            console.error('Failed to load vendors:', err);
-        } finally {
-            setIsLoadingVendors(false);
-        }
-    };
 
     const handleBrowseCsv = async () => {
         try {
@@ -84,25 +58,10 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
         try {
             setIsSubmitting(true);
 
-            // 0. Update any changed vendor coefficients
-            for (const vendor of vendors) {
-                const newCoef = editedCoefficients[vendor.id];
-                if (newCoef !== undefined && newCoef !== vendor.cost_coefficient) {
-                    try {
-                        await api.updateVendor(vendor.id, {
-                            cost_coefficient: newCoef,
-                            min_price_margin: vendor.min_price_margin
-                        });
-                    } catch (e) {
-                        console.error('Failed to update vendor coeff', e);
-                    }
-                }
-            }
-
             // 1. Create Auction
             const auctionId = await api.createAuction({
                 name: auctionName,
-                vendor_id: selectedVendorId || undefined
+                vendor_id: undefined
             });
 
             // 2. Import Manifest if selected
@@ -194,61 +153,7 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
                             </div>
                         </div>
 
-                        {/* Section 3: Vendor Configuration */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium leading-none">
-                                Vendor Configuration
-                            </label>
-                            <p className="text-sm text-muted-foreground">
-                                Select the vendor to apply pricing rules
-                            </p>
-                            {isLoadingVendors ? (
-                                <div className="flex items-center gap-2 text-sm text-muted-foreground h-20 -mb-2">
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    Loading vendors...
-                                </div>
-                            ) : (
-                                <div className="grid gap-2 mt-2 max-h-40 overflow-y-auto px-1 py-1">
-                                    {vendors.map((vendor) => (
-                                        <div
-                                            key={vendor.id}
-                                            onClick={() => setSelectedVendorId(vendor.id === selectedVendorId ? null : vendor.id)}
-                                            className={`flex cursor-pointer items-center justify-between rounded-lg border p-3 transition-colors hover:bg-muted/50 ${selectedVendorId === vendor.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : ''
-                                                }`}
-                                        >
-                                            <div className="font-medium text-sm">{vendor.name}</div>
-                                            <div className="text-xs text-muted-foreground flex items-center gap-1">
-                                                Cost = Retail &times;
-                                                <div className="flex items-center gap-0.5">
-                                                    <Input
-                                                        type="number"
-                                                        step="1"
-                                                        min="1"
-                                                        max="100"
-                                                        className="w-12 h-6 px-1 py-0 text-xs inline-block text-center"
-                                                        value={editedCoefficients[vendor.id] !== undefined ? Math.round(editedCoefficients[vendor.id] * 100) : Math.round(vendor.cost_coefficient * 100)}
-                                                        onChange={(e) => {
-                                                            const val = parseFloat(e.target.value);
-                                                            setEditedCoefficients(prev => ({
-                                                                ...prev,
-                                                                [vendor.id]: isNaN(val) ? 0 : val / 100
-                                                            }));
-                                                        }}
-                                                        onClick={(e) => e.stopPropagation()}
-                                                    />
-                                                    <span>%</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                    {vendors.length === 0 && (
-                                        <div className="text-sm text-muted-foreground italic py-2">
-                                            No active vendors found.
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
+
                     </div>
 
                     <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 shrink-0 pt-2">

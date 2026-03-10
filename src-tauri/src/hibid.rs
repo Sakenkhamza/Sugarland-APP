@@ -116,6 +116,8 @@ mod tests {
             auction_id: None,
             listed_at: None,
             sold_at: None,
+            sale_order: None,
+            buybacker_id: None,
             created_at: "2026-02-10".to_string(),
             updated_at: "2026-02-10".to_string(),
         }

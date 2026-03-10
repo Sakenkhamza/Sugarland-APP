@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { Auction } from '@/types';
 import * as XLSX from 'xlsx';
-import { Plus, FileSpreadsheet, Calendar } from 'lucide-react';
+import { Plus, FileSpreadsheet, Calendar, Pencil, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { useNavigate } from 'react-router-dom';
 import {
     Table,
@@ -15,6 +16,14 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+    DialogDescription,
+} from '@/components/ui/dialog';
 import { formatDate } from '@/lib/utils';
 import { CreateAuctionDialog } from '@/components/auctions/CreateAuctionDialog';
 import { toast } from 'sonner';
@@ -24,6 +33,12 @@ export function AuctionsPage() {
     const [auctions, setAuctions] = useState<Auction[]>([]);
     const [loading, setLoading] = useState(true);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+    // Edit dialog state
+    const [editTarget, setEditTarget] = useState<Auction | null>(null);
+    const [editName, setEditName] = useState('');
+    const [editSaving, setEditSaving] = useState(false);
+    const [deleteConfirm, setDeleteConfirm] = useState(false);
 
     useEffect(() => {
         loadAuctions();
@@ -40,6 +55,53 @@ export function AuctionsPage() {
             setLoading(false);
         }
     };
+
+    const openEditDialog = (auction: Auction) => {
+        setEditTarget(auction);
+        setEditName(auction.name);
+        setDeleteConfirm(false);
+    };
+
+    const closeEditDialog = () => {
+        setEditTarget(null);
+        setEditName('');
+        setDeleteConfirm(false);
+    };
+
+    const handleRename = async () => {
+        if (!editTarget || !editName.trim()) return;
+        setEditSaving(true);
+        try {
+            await api.renameAuction(editTarget.id, editName.trim());
+            toast.success('Auction renamed successfully');
+            closeEditDialog();
+            loadAuctions();
+        } catch (err) {
+            toast.error('Failed to rename auction');
+        } finally {
+            setEditSaving(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!editTarget) return;
+        if (!deleteConfirm) {
+            setDeleteConfirm(true);
+            return;
+        }
+        setEditSaving(true);
+        try {
+            await api.deleteAuction(editTarget.id);
+            toast.success(`Auction "${editTarget.name}" deleted`);
+            closeEditDialog();
+            loadAuctions();
+        } catch (err) {
+            toast.error('Failed to delete auction');
+        } finally {
+            setEditSaving(false);
+        }
+    };
+
     const handleExport = async (auction: Auction) => {
         try {
             // Fetch all items for this auction
@@ -51,12 +113,10 @@ export function AuctionsPage() {
                 return;
             }
 
-            const formattedData = auctionItems.map((item) => {
+            const formattedData = auctionItems.map((item, idx) => {
+                const r = idx + 2;
                 const retail = Math.round(item.retail_price || 0);
-                const cost = Math.round(item.cost_price || 0);
-                const min_price = Math.ceil(item.min_price || 0);
                 const cost_pct = (item.retail_price || 0) > 0 ? Math.round(((item.cost_price || 0) / (item.retail_price || 1)) * 100) : 0;
-                const min_pr_10_pct = Math.round((item.retail_price || 0) * 0.10);
 
                 return {
                     'Auction name': auction.name,
@@ -66,11 +126,11 @@ export function AuctionsPage() {
                     'Vendor Code': item.source === 'Best Buy' ? 'ATXSUGAR' : '',
                     'Retail Price': retail,
                     'Source': item.source || '',
-                    'cost': cost_pct + '%',
-                    'cost price': cost,
-                    'Retail price': retail,
-                    '% min pr (+10%)': min_pr_10_pct,
-                    'min price': min_price
+                    'cost': (cost_pct / 100),
+                    'cost price': { t: 'n', f: `ROUND(F${r}*H${r}, 2)` },
+                    'Retail price': { t: 'n', f: `F${r}` },
+                    '% min pr (+10%)': { t: 'n', f: `ROUND(F${r}*0.10, 2)` },
+                    'min price': { t: 'n', f: `CEILING(I${r}+K${r}, 1)` }
                 };
             });
 
@@ -121,6 +181,75 @@ export function AuctionsPage() {
                 onOpenChange={setIsDialogOpen}
                 onSuccess={loadAuctions}
             />
+
+            {/* Edit Auction Dialog */}
+            <Dialog open={!!editTarget} onOpenChange={(open) => !open && closeEditDialog()}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Edit Auction</DialogTitle>
+                        <DialogDescription>
+                            Rename the auction or delete it permanently.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Auction Name</label>
+                            <Input
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+                                placeholder="Enter auction name"
+                            />
+                        </div>
+                    </div>
+
+                    <DialogFooter className="flex-col sm:flex-row gap-2">
+                        {deleteConfirm ? (
+                            <div className="flex gap-2 w-full">
+                                <Button
+                                    variant="destructive"
+                                    className="flex-1"
+                                    onClick={handleDelete}
+                                    disabled={editSaving}
+                                >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Confirm Delete
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setDeleteConfirm(false)}
+                                    disabled={editSaving}
+                                >
+                                    Cancel
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="flex gap-2 w-full">
+                                <Button
+                                    variant="destructive"
+                                    size="icon"
+                                    onClick={handleDelete}
+                                    disabled={editSaving}
+                                    title="Delete auction"
+                                >
+                                    <Trash2 className="h-4 w-4" />
+                                </Button>
+                                <div className="flex-1" />
+                                <Button variant="outline" onClick={closeEditDialog} disabled={editSaving}>
+                                    Cancel
+                                </Button>
+                                <Button
+                                    onClick={handleRename}
+                                    disabled={editSaving || !editName.trim() || editName.trim() === editTarget?.name}
+                                >
+                                    Save
+                                </Button>
+                            </div>
+                        )}
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {auctions.length > 0 && (
                 <div className="grid gap-4 md:grid-cols-2">
@@ -203,8 +332,18 @@ export function AuctionsPage() {
                                                     size="sm"
                                                     className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 w-9 px-0"
                                                     onClick={() => handleExport(auction)}
+                                                    title="Export to Excel"
                                                 >
                                                     <FileSpreadsheet className="h-4 w-4" />
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="w-9 px-0"
+                                                    onClick={() => openEditDialog(auction)}
+                                                    title="Edit auction"
+                                                >
+                                                    <Pencil className="h-4 w-4" />
                                                 </Button>
                                             </div>
                                         </TableCell>

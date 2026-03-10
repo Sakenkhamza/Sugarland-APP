@@ -1,4 +1,4 @@
-// CSV Parser module — B-Stock manifest parsing and data cleaning
+// CSV Parser module — Manyfastscan manifest parsing and data cleaning
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -26,6 +26,9 @@ pub struct BStockManifestRow {
 
     #[serde(rename = "Source", default)]
     pub source: Option<String>,
+
+    #[serde(rename = "Description", default)]
+    pub description: Option<String>,
 }
 
 /// Parse a B-Stock manifest CSV file into structured rows
@@ -79,6 +82,67 @@ pub fn normalize_source(source: &Option<String>) -> String {
             }
         }
         None => "Unknown".to_string(),
+    }
+}
+
+/// Extract condition from description string, then normalize it
+pub fn extract_and_normalize_condition(description: &Option<String>) -> String {
+    let mut raw_condition = String::new();
+    
+    if let Some(desc) = description {
+        let marker = "Condition: ";
+        if let Some(idx) = desc.find(marker) {
+            let start = idx + marker.len();
+            let remainder = &desc[start..];
+            if let Some(end_idx) = remainder.find('\n') {
+                raw_condition = remainder[..end_idx].trim().to_string();
+            } else if let Some(end_idx) = remainder.find('\r') {
+                raw_condition = remainder[..end_idx].trim().to_string();
+            } else {
+                raw_condition = remainder.trim().to_string();
+            }
+        }
+    }
+
+    normalize_condition(&Some(raw_condition))
+}
+
+/// Normalize a condition string to a canonical condition label
+pub fn normalize_condition(condition: &Option<String>) -> String {
+    match condition {
+        Some(s) => {
+            let lower = s.to_lowercase();
+            if lower.contains("canceled") || lower.contains("cancelled") {
+                "New - Canceled delivery".to_string()
+            } else if lower.contains("cosmetic") {
+                "New - Cosmetic flaws".to_string()
+            } else if lower.contains("packaging flawed") {
+                "New - Packaging flawed".to_string()
+            } else if lower.contains("factory sealed") || lower.contains("new in box") {
+                "New - Factory sealed".to_string()
+            } else if lower.contains("not in original") {
+                "New - Not in original packaging".to_string()
+            } else if lower.contains("open box") {
+                if lower.contains("used") || lower.contains("like new") {
+                    "Used - Like new and open box".to_string()
+                } else {
+                    "New - Open box".to_string()
+                }
+            } else if lower.contains("renewed") {
+                "Renewed".to_string()
+            } else if lower.contains("acceptable") {
+                "Used - Acceptable".to_string()
+            } else if lower.contains("very good") {
+                "Used - Very good".to_string()
+            } else if lower.contains("good") {
+                "Used - Good".to_string()
+            } else if lower.contains("broken") || lower.contains("scrap") || lower.contains("salvage") {
+                "Broken".to_string()
+            } else {
+                "New - Open box".to_string() // safe default that matches a UI option
+            }
+        }
+        None => "New - Open box".to_string(),
     }
 }
 
@@ -240,5 +304,14 @@ mod tests {
         assert_eq!(normalize_source(&Some("PDX7".to_string())), "Mech/PDX7");
         assert_eq!(normalize_source(&Some("Amazon B-Stock".to_string())), "Amazon Bstock");
         assert_eq!(normalize_source(&None), "Unknown");
+    }
+
+    #[test]
+    fn test_normalize_condition() {
+        assert_eq!(normalize_condition(&Some("New Factory Sealed".to_string())), "New - Factory sealed");
+        assert_eq!(normalize_condition(&Some("Used - Good".to_string())), "Used - Good");
+        assert_eq!(normalize_condition(&Some("New - Canceled delivery".to_string())), "New - Canceled delivery");
+        assert_eq!(normalize_condition(&None), "New - Open box");
+        assert_eq!(normalize_condition(&Some("Some random string".to_string())), "New - Open box");
     }
 }

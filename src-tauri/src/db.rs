@@ -29,6 +29,8 @@ pub struct InventoryItemRow {
     pub auction_id: Option<String>,
     pub listed_at: Option<String>,
     pub sold_at: Option<String>,
+    pub sale_order: Option<i32>,
+    pub buybacker_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -324,29 +326,166 @@ impl Database {
             [],
         );
 
-        // Migration: Add 'Unsold' to inventory_items current_status CHECK constraint
+        // Migration: Add 'Unsold' and 'FloorSale' to inventory_items current_status CHECK constraint
         // Use PRAGMA writable_schema to directly patch the constraint (avoids trigger/view issues)
-        let has_unsold: bool = self.conn.query_row(
+        let has_floorsale: bool = self.conn.query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_items'",
             [],
             |row| {
                 let sql: String = row.get(0)?;
-                Ok(sql.contains("Unsold"))
+                Ok(sql.contains("FloorSale"))
             },
         ).unwrap_or(true);
 
-        if !has_unsold {
-            log::info!("Running migration: adding 'Unsold' to inventory_items CHECK constraint");
-            let _ = self.conn.execute_batch("
-                PRAGMA writable_schema = ON;
-                UPDATE sqlite_master
-                SET sql = replace(sql, '''Sold'', ''Buyback''', '''Sold'', ''Unsold'', ''Buyback''')
-                WHERE type = 'table' AND name = 'inventory_items';
-                PRAGMA writable_schema = OFF;
-            ");
-            // Verify integrity
+        if !has_floorsale {
+            log::info!("Running migration: adding 'Unsold'/'FloorSale' to inventory_items CHECK constraint");
+            // First ensure Unsold is present
+            let has_unsold: bool = self.conn.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_items'",
+                [],
+                |row| {
+                    let sql: String = row.get(0)?;
+                    Ok(sql.contains("Unsold"))
+                },
+            ).unwrap_or(true);
+
+            if !has_unsold {
+                let _ = self.conn.execute_batch("
+                    PRAGMA writable_schema = ON;
+                    UPDATE sqlite_master
+                    SET sql = replace(sql, '''Sold'', ''Buyback''', '''Sold'', ''Unsold'', ''FloorSale'', ''Buyback''')
+                    WHERE type = 'table' AND name = 'inventory_items';
+                    PRAGMA writable_schema = OFF;
+                ");
+            } else {
+                let _ = self.conn.execute_batch("
+                    PRAGMA writable_schema = ON;
+                    UPDATE sqlite_master
+                    SET sql = replace(sql, '''Unsold'', ''Buyback''', '''Unsold'', ''FloorSale'', ''Buyback''')
+                    WHERE type = 'table' AND name = 'inventory_items';
+                    PRAGMA writable_schema = OFF;
+                ");
+            }
             let _ = self.conn.execute_batch("PRAGMA integrity_check;");
         }
+
+        // Migration: Add sale_order and buybacker_id columns to inventory_items
+        let _ = self.conn.execute("ALTER TABLE inventory_items ADD COLUMN sale_order INTEGER", []);
+        let _ = self.conn.execute("ALTER TABLE inventory_items ADD COLUMN buybacker_id TEXT", []);
+
+        // ============================================================
+        // New tables for ТЗ: condition_types, source_types, pricing_rules, buybackers
+        // ============================================================
+        self.conn.execute_batch("
+            -- Condition types reference table
+            CREATE TABLE IF NOT EXISTS condition_types (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL UNIQUE,
+                category TEXT NOT NULL CHECK(category IN ('New', 'Used', 'Renewed', 'Broken'))
+            );
+
+            -- Source types reference table
+            CREATE TABLE IF NOT EXISTS source_types (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE
+            );
+
+            -- Pricing rules matrix (condition-based)
+            CREATE TABLE IF NOT EXISTS pricing_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                condition_category TEXT NOT NULL CHECK(condition_category IN ('New', 'Used', 'Renewed', 'Broken')),
+                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 3),
+                multiplier REAL NOT NULL,
+                label TEXT,
+                UNIQUE(condition_category, level)
+            );
+
+            -- Buy-backer registry
+            DROP TABLE IF EXISTS buybackers;
+            CREATE TABLE IF NOT EXISTS buybackers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_inventory_sale_order ON inventory_items(sale_order);
+            CREATE INDEX IF NOT EXISTS idx_inventory_buybacker ON inventory_items(buybacker_id);
+        ")?;
+
+        // Seed condition types
+        self.conn.execute_batch("
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('new_canceled', 'New - Canceled delivery', 'New');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('new_cosmetic', 'New - Cosmetic flaws', 'New');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('new_packaging', 'New - Packaging flawed', 'New');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('new_sealed', 'New - Factory sealed', 'New');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('new_no_orig_pkg', 'New - Not in original packaging', 'New');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('new_open_box', 'New - Open box', 'New');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('renewed', 'Renewed', 'Renewed');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('used_acceptable', 'Used - Acceptable', 'Used');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('used_good', 'Used - Good', 'Used');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('used_like_new', 'Used - Like new and open box', 'Used');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('used_very_good', 'Used - Very good', 'Used');
+            INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
+                ('broken', 'Broken', 'Broken');
+        ")?;
+
+        // Seed source types
+        self.conn.execute_batch("
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('amazon', 'Amazon Bstock');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('bestbuy', 'Best Buy');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('wayfair', 'Wayfair');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('mech', 'Mech/PDX7');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('target', 'Target');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('costco', 'Costco');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('homedepot', 'Home Depot');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('lowes', 'Lowes');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('walmart', 'Walmart');
+            INSERT OR IGNORE INTO source_types (id, name) VALUES ('unknown', 'Unknown');
+        ")?;
+
+        // Seed pricing rules matrix
+        // New: L1=Cost(1.0), L2=Cost+5%(1.05), L3=Cost+10%(1.10)
+        // Used: L1=Cost(1.0), L2=Cost+3%(1.03), L3=Cost+6%(1.06)
+        // Renewed: same as Used
+        // Broken: L1=0.5*Cost, L2=0.75*Cost, L3=1.02*Cost (max 2% recovery)
+        self.conn.execute_batch("
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('New', 1, 1.00, 'Cost (Base)');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('New', 2, 1.05, 'Cost + 5%');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('New', 3, 1.10, 'Cost + 10%');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Used', 1, 1.00, 'Cost (Base)');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Used', 2, 1.03, 'Cost + 3%');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Used', 3, 1.06, 'Cost + 6%');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Renewed', 1, 1.00, 'Cost (Base)');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Renewed', 2, 1.03, 'Cost + 3%');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Renewed', 3, 1.06, 'Cost + 6%');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Broken', 1, 0.50, '50% of Cost');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Broken', 2, 0.75, '75% of Cost');
+            INSERT OR IGNORE INTO pricing_rules (condition_category, level, multiplier, label) VALUES
+                ('Broken', 3, 1.02, 'Max 2% recovery');
+        ")?;
 
         // Seed settings
         self.conn.execute_batch(
@@ -358,9 +497,9 @@ impl Database {
             INSERT OR IGNORE INTO settings (key, value, description, category) VALUES
                 ('cash_sale_commission_rate', '0.10', 'Commission rate for cash sales (10%)', 'financial');
             INSERT OR IGNORE INTO settings (key, value, description, category) VALUES
-                ('app_version', '0.2.0', 'Current application version', 'system');
+                ('app_version', '0.3.0', 'Current application version', 'system');
             INSERT OR IGNORE INTO settings (key, value, description, category) VALUES
-                ('db_version', '2', 'Database schema version', 'system');
+                ('db_version', '3', 'Database schema version', 'system');
             ",
         )?;
 
@@ -391,12 +530,15 @@ impl Database {
                     normalized_title, extracted_brand, extracted_model, sku_extracted, category,
                     retail_price, cost_price, min_price,
                     current_status, auction_id, listed_at, sold_at,
+                    sale_order, buybacker_id,
                     created_at, updated_at
              FROM inventory_items WHERE 1=1",
         );
 
         if let Some(s) = status {
             query.push_str(&format!(" AND current_status = '{}'", s));
+        } else {
+            query.push_str(" AND current_status != 'Sold'");
         }
 
         query.push_str(" ORDER BY created_at DESC LIMIT 1000");
@@ -425,8 +567,10 @@ impl Database {
                     auction_id: row.get(17)?,
                     listed_at: row.get(18)?,
                     sold_at: row.get(19)?,
-                    created_at: row.get(20)?,
-                    updated_at: row.get(21)?,
+                    sale_order: row.get(20)?,
+                    buybacker_id: row.get(21)?,
+                    created_at: row.get(22)?,
+                    updated_at: row.get(23)?,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;

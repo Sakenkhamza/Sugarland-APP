@@ -3,22 +3,18 @@ import { useEffect, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import {
     LayoutDashboard,
-    Upload,
     Package,
     Gavel,
     FileBarChart,
     Settings,
-    ArrowLeftRight,
     Candy,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-    { name: 'Import', href: '/import', icon: Upload },
     { name: 'Inventory', href: '/inventory', icon: Package },
     { name: 'Auctions', href: '/auctions', icon: Gavel },
-    { name: 'Reconciliation', href: '/reconciliation', icon: ArrowLeftRight },
     { name: 'Reports', href: '/reports', icon: FileBarChart },
     { name: 'Settings', href: '/settings', icon: Settings },
 ];

@@ -1,6 +1,7 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { api } from '@/lib/api';
-import type { InventoryItem } from '@/types';
+import type { InventoryItem, ConditionType, SourceType } from '@/types';
+import { SortableTableHead, type SortConfig } from '@/components/ui/sortable-table-head';
 import { Search, Download, MoreHorizontal, Package } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatCurrency, formatDate, naturalSort } from '@/lib/utils';
 import { InventoryItemDetailDialog } from '@/components/inventory/InventoryItemDetailDialog';
 
 export function InventoryPage() {
@@ -32,12 +33,23 @@ export function InventoryPage() {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
 
+    // Reference data for inline editing
+    const [conditionTypes, setConditionTypes] = useState<ConditionType[]>([]);
+    const [sourceTypes, setSourceTypes] = useState<SourceType[]>([]);
+
     // Add state for details dialog
     const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
     const [detailOpen, setDetailOpen] = useState(false);
 
+    // Sorting
+    const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
+    const handleSort = useCallback((column: string, direction: 'asc' | 'desc') => {
+        setSortConfig({ column, direction });
+    }, []);
+
     useEffect(() => {
         loadItems();
+        loadReferenceData();
     }, []);
 
     const loadItems = async () => {
@@ -49,6 +61,19 @@ export function InventoryPage() {
             console.error('Failed to load inventory:', err);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const loadReferenceData = async () => {
+        try {
+            const [ct, st] = await Promise.all([
+                api.getConditionTypes(),
+                api.getSourceTypes(),
+            ]);
+            setConditionTypes(ct);
+            setSourceTypes(st);
+        } catch (err) {
+            console.error('Failed to load reference data:', err);
         }
     };
 
@@ -64,14 +89,61 @@ export function InventoryPage() {
         }
     };
 
+    // Inline editing handlers
+    const handleConditionChange = async (itemId: string, condition: string) => {
+        try {
+            await api.updateItemCondition(itemId, condition);
+            setItems(prev => prev.map(i => i.id === itemId ? { ...i, condition } : i));
+        } catch { toast.error('Failed to update condition'); }
+    };
+
+    const handleSourceChange = async (itemId: string, source: string) => {
+        try {
+            await api.updateItemSource(itemId, source);
+            setItems(prev => prev.map(i => i.id === itemId ? { ...i, source } : i));
+        } catch { toast.error('Failed to update source'); }
+    };
+
     const filteredItems = useMemo(() => {
         return items.filter(item => {
             const matchesSearch = item.raw_title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 item.lot_number?.toLowerCase().includes(searchTerm.toLowerCase());
-            const matchesStatus = statusFilter === 'all' || item.current_status === statusFilter;
+            
+            let matchesStatus = false;
+            if (statusFilter === 'all') {
+                matchesStatus = item.current_status !== 'Sold' && item.current_status !== 'Scrap';
+            } else {
+                matchesStatus = item.current_status === statusFilter;
+            }
+
             return matchesSearch && matchesStatus;
         });
     }, [items, searchTerm, statusFilter]);
+
+    const sortedItems = useMemo(() => {
+        if (!sortConfig) return filteredItems;
+        const { column, direction } = sortConfig;
+        const sorted = [...filteredItems].sort((a, b) => {
+            let aVal: any;
+            let bVal: any;
+            switch (column) {
+                case 'lot_number': return direction === 'asc' ? naturalSort(a.lot_number || '', b.lot_number || '') : naturalSort(b.lot_number || '', a.lot_number || '');
+                case 'raw_title': aVal = a.raw_title.toLowerCase(); bVal = b.raw_title.toLowerCase(); break;
+                case 'condition': aVal = (a.condition || '').toLowerCase(); bVal = (b.condition || '').toLowerCase(); break;
+                case 'source': aVal = (a.source || '').toLowerCase(); bVal = (b.source || '').toLowerCase(); break;
+                case 'current_status': aVal = a.current_status.toLowerCase(); bVal = b.current_status.toLowerCase(); break;
+                case 'retail_price': aVal = a.retail_price || 0; bVal = b.retail_price || 0; break;
+                case 'cost_price': aVal = a.cost_price || 0; bVal = b.cost_price || 0; break;
+                case 'min_price': aVal = a.min_price || 0; bVal = b.min_price || 0; break;
+                case 'created_at': aVal = a.created_at || ''; bVal = b.created_at || ''; break;
+                default: return 0;
+            }
+            if (aVal < bVal) return direction === 'asc' ? -1 : 1;
+            if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+        return sorted;
+    }, [filteredItems, sortConfig]);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -79,6 +151,8 @@ export function InventoryPage() {
             case 'Listed': return 'bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25';
             case 'Sold': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/25';
             case 'Buyback': return 'bg-red-500/15 text-red-700 dark:text-red-300 hover:bg-red-500/25';
+            case 'FloorSale': return 'bg-orange-500/15 text-orange-700 dark:text-orange-300 hover:bg-orange-500/25';
+            case 'Unsold': return 'bg-gray-500/15 text-gray-700 dark:text-gray-300 hover:bg-gray-500/25';
             default: return 'bg-gray-500/15 text-gray-700 dark:text-gray-300';
         }
     };
@@ -118,7 +192,7 @@ export function InventoryPage() {
                     />
                 </div>
                 <div className="flex gap-2">
-                    {['all', 'InStock', 'Listed', 'Sold', 'Buyback'].map((status) => (
+                    {['all', 'InStock', 'Listed', 'Buyback', 'FloorSale', 'Unsold', 'Scrap'].map((status) => (
                         <Button
                             key={status}
                             variant={statusFilter === status ? 'default' : 'outline'}
@@ -126,7 +200,7 @@ export function InventoryPage() {
                             onClick={() => setStatusFilter(status)}
                             className="capitalize"
                         >
-                            {status === 'all' ? 'All Items' : status}
+                            {status === 'all' ? 'Active Stock' : status === 'FloorSale' ? 'Floor Sales' : status}
                         </Button>
                     ))}
                 </div>
@@ -137,26 +211,28 @@ export function InventoryPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="w-[100px]">Lot #</TableHead>
-                                <TableHead>Title</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead className="text-right">Retail</TableHead>
-                                <TableHead className="text-right">Cost</TableHead>
-                                <TableHead className="text-right">Min Price</TableHead>
-                                <TableHead className="text-right">Date</TableHead>
+                                <SortableTableHead column="lot_number" label="Lot #" sortConfig={sortConfig} onSort={handleSort} className="w-[100px]" isText />
+                                <SortableTableHead column="raw_title" label="Title" sortConfig={sortConfig} onSort={handleSort} isText />
+                                <SortableTableHead column="condition" label="Condition" sortConfig={sortConfig} onSort={handleSort} className="w-[140px]" isText />
+                                <SortableTableHead column="source" label="Source" sortConfig={sortConfig} onSort={handleSort} className="w-[120px]" isText />
+                                <SortableTableHead column="current_status" label="Status" sortConfig={sortConfig} onSort={handleSort} isText />
+                                <SortableTableHead column="retail_price" label="Retail" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
+                                <SortableTableHead column="cost_price" label="Cost" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
+                                <SortableTableHead column="min_price" label="Min Price" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
+                                <SortableTableHead column="created_at" label="Date" sortConfig={sortConfig} onSort={handleSort} className="text-right" isText />
                                 <TableHead className="w-[50px]"></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {loading ? (
                                 <TableRow>
-                                    <TableCell colSpan={8} className="h-24 text-center">
+                                    <TableCell colSpan={10} className="h-24 text-center">
                                         Loading inventory...
                                     </TableCell>
                                 </TableRow>
                             ) : filteredItems.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={8} className="h-64 text-center">
+                                    <TableCell colSpan={10} className="h-64 text-center">
                                         <div className="flex flex-col items-center justify-center text-muted-foreground">
                                             <Package className="h-12 w-12 mb-3 opacity-20" />
                                             <p>No items found matching your filters</p>
@@ -164,7 +240,7 @@ export function InventoryPage() {
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                filteredItems.map((item) => (
+                                sortedItems.map((item) => (
                                     <TableRow key={item.id} className="group">
                                         <TableCell className="font-medium font-mono">
                                             {item.lot_number || '-'}
@@ -172,8 +248,34 @@ export function InventoryPage() {
                                         <TableCell className="max-w-[300px]">
                                             <div className="truncate font-medium">{item.raw_title}</div>
                                             <div className="text-xs text-muted-foreground truncate">
-                                                {item.id.split('-')[0]} • {item.source || 'Unknown Source'}
+                                                {item.id.split('-')[0]}
                                             </div>
+                                        </TableCell>
+                                        {/* Inline Condition Dropdown */}
+                                        <TableCell>
+                                            <select
+                                                className="w-full bg-transparent border border-transparent hover:border-border rounded px-1 py-0.5 text-xs cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
+                                                value={item.condition || ''}
+                                                onChange={(e) => handleConditionChange(item.id, e.target.value)}
+                                            >
+                                                <option value="">— Set —</option>
+                                                {conditionTypes.map(ct => (
+                                                    <option key={ct.id} value={ct.label}>{ct.label}</option>
+                                                ))}
+                                            </select>
+                                        </TableCell>
+                                        {/* Inline Source Dropdown */}
+                                        <TableCell>
+                                            <select
+                                                className="w-full bg-transparent border border-transparent hover:border-border rounded px-1 py-0.5 text-xs cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
+                                                value={item.source || ''}
+                                                onChange={(e) => handleSourceChange(item.id, e.target.value)}
+                                            >
+                                                <option value="">— Set —</option>
+                                                {sourceTypes.map(st => (
+                                                    <option key={st.id} value={st.name}>{st.name}</option>
+                                                ))}
+                                            </select>
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant="secondary" className={getStatusColor(item.current_status)}>
@@ -190,7 +292,6 @@ export function InventoryPage() {
                                             {formatCurrency(item.min_price)}
                                         </TableCell>
                                         <TableCell className="text-right text-muted-foreground text-xs">
-                                            {/* Use valid date fallback to avoid NaN */}
                                             {formatDate(item.created_at || new Date().toISOString())}
                                         </TableCell>
                                         <TableCell>
@@ -252,7 +353,7 @@ export function InventoryPage() {
             </Card>
 
             <div className="text-xs text-muted-foreground text-center">
-                Showing {filteredItems.length} of {items.length} items
+                Showing {sortedItems.length} of {items.length} items
             </div>
         </div>
     );

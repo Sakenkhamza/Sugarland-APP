@@ -219,6 +219,17 @@ impl AuctionManager {
         // 4. Drop the statement (borrow checker) before mutating db
         drop(item_stmt);
 
+        // 4.5 Load active buybackers from database
+        let mut bb_stmt = db.conn.prepare(
+            "SELECT name FROM buybackers WHERE is_active = TRUE"
+        ).map_err(|e| e.to_string())?;
+        let buyback_names: Vec<String> = bb_stmt.query_map([], |row| {
+            row.get::<_, String>(0)
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .map(|n| n.to_lowercase())
+        .collect();
+
         // 5. Reconcile: match CSV results to items, update statuses, insert auction_results
         let mut report_items: Vec<ReportItem> = Vec::new();
 
@@ -254,15 +265,12 @@ impl AuctionManager {
 
             let selling_price = high_bid / 100.0;
             
-            // Re-introduce buyback logic with new names
-            let buyback_names = [
-                "sanzhar houston",
-                "kuralay kateryne",
-                "almata atastana",
-                "yesset karayev"
-            ];
-            
-            let is_buyback = is_sold && buyback_names.iter().any(|name| buyer.to_lowercase().contains(name));
+            let is_buyback = if is_sold {
+                let winner_lower = buyer.to_lowercase();
+                buyback_names.iter().any(|bb_name| winner_lower.contains(bb_name))
+            } else {
+                false
+            };
             
             let profit_loss = if is_sold && !is_buyback { selling_price - item.cost_price } else { 0.0 };
 
@@ -409,7 +417,7 @@ impl AuctionManager {
         // Data rows
         for (i, item) in items.iter().enumerate() {
             let row = (i + 1) as u32;
-            let min_pr_10 = item.retail_price * 0.10;
+            let xl_row = row + 1; // 1-based index for excel formulas
 
             worksheet.write_string_with_format(row, 0, auction_name, &data_format).map_err(|e| e.to_string())?;
             worksheet.write_string_with_format(row, 1, &item.lot_number, &data_format).map_err(|e| e.to_string())?;
@@ -419,10 +427,12 @@ impl AuctionManager {
             worksheet.write_number_with_format(row, 5, item.retail_price, &number_format).map_err(|e| e.to_string())?;
             worksheet.write_string_with_format(row, 6, &item.source, &data_format).map_err(|e| e.to_string())?;
             worksheet.write_number_with_format(row, 7, item.cost_coefficient, &percent_format).map_err(|e| e.to_string())?;
-            worksheet.write_number_with_format(row, 8, item.cost_price, &number_format).map_err(|e| e.to_string())?;
-            worksheet.write_number_with_format(row, 9, item.retail_price, &number_format).map_err(|e| e.to_string())?;
-            worksheet.write_number_with_format(row, 10, min_pr_10, &number_format).map_err(|e| e.to_string())?;
-            worksheet.write_number_with_format(row, 11, item.min_price, &number_format).map_err(|e| e.to_string())?;
+            
+            worksheet.write_formula_with_format(row, 8, format!("=ROUND(F{}*H{}, 2)", xl_row, xl_row).as_str(), &number_format).map_err(|e| e.to_string())?;
+            worksheet.write_formula_with_format(row, 9, format!("=F{}", xl_row).as_str(), &number_format).map_err(|e| e.to_string())?;
+            worksheet.write_formula_with_format(row, 10, format!("=ROUND(F{}*0.10, 2)", xl_row).as_str(), &number_format).map_err(|e| e.to_string())?;
+            worksheet.write_formula_with_format(row, 11, format!("=CEILING(I{}+K{}, 1)", xl_row, xl_row).as_str(), &number_format).map_err(|e| e.to_string())?;
+            
             worksheet.write_number_with_format(row, 12, item.high_bid, &number_format).map_err(|e| e.to_string())?;
             worksheet.write_number_with_format(row, 13, item.selling_price, &currency_format).map_err(|e| e.to_string())?;
             worksheet.write_number_with_format(row, 14, item.profit_loss, &currency_format).map_err(|e| e.to_string())?;
@@ -817,6 +827,39 @@ pub fn get_all_auction_reports(
 ) -> std::result::Result<Vec<AuctionReport>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     AuctionManager::get_all_auction_reports(&db)
+}
+
+#[tauri::command]
+pub fn rename_auction(
+    auction_id: String,
+    name: String,
+    state: State<crate::AppState>,
+) -> std::result::Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "UPDATE auctions SET name = ?1 WHERE id = ?2",
+        rusqlite::params![name, auction_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_auction(
+    auction_id: String,
+    state: State<crate::AppState>,
+) -> std::result::Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    // Reset items back to InStock
+    db.conn.execute(
+        "UPDATE inventory_items SET current_status = 'InStock', auction_id = NULL, listed_at = NULL WHERE auction_id = ?1",
+        rusqlite::params![auction_id],
+    ).map_err(|e| e.to_string())?;
+    // Delete related records
+    db.conn.execute("DELETE FROM auction_results WHERE auction_id = ?1", rusqlite::params![auction_id]).map_err(|e| e.to_string())?;
+    db.conn.execute("DELETE FROM auction_reports WHERE auction_id = ?1", rusqlite::params![auction_id]).map_err(|e| e.to_string())?;
+    // Delete the auction itself
+    db.conn.execute("DELETE FROM auctions WHERE id = ?1", rusqlite::params![auction_id]).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

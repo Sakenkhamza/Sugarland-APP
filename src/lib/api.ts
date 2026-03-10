@@ -13,6 +13,11 @@ import type {
     ValidationResult,
     FinishAuctionResult,
     AuctionReport,
+    ConditionType,
+    SourceType,
+    PricingRule,
+    Buybacker,
+    ItemHistoryEntry,
 } from '@/types';
 
 // Wrap invoke to handle mock mode if backend is not available (for dev without Rust)
@@ -131,6 +136,71 @@ export const api = {
 
     openReportFile: (filePath: string) =>
         invokeCommand<void>('open_report_file', { filePath }),
+
+    // Condition Types
+    getConditionTypes: () =>
+        invokeCommand<ConditionType[]>('get_condition_types'),
+
+    // Source Types
+    getSourceTypes: () =>
+        invokeCommand<SourceType[]>('get_source_types'),
+
+    addSourceType: (name: string) =>
+        invokeCommand<string>('add_source_type', { name }),
+
+    deleteSourceType: (name: string) =>
+        invokeCommand<void>('delete_source_type', { name }),
+
+    // Item field updates
+    updateItemCondition: (itemId: string, condition: string) =>
+        invokeCommand<void>('update_item_condition', { itemId, condition }),
+
+    updateItemSource: (itemId: string, source: string) =>
+        invokeCommand<void>('update_item_source', { itemId, source }),
+
+    updateItemSaleOrder: (itemId: string, saleOrder: number) =>
+        invokeCommand<void>('update_item_sale_order', { itemId, saleOrder }),
+
+    updateItemBuybacker: (itemId: string, buybackerId: string) =>
+        invokeCommand<void>('update_item_buybacker', { itemId, buybackerId }),
+
+    // Pricing Rules
+    getPricingRules: () =>
+        invokeCommand<PricingRule[]>('get_pricing_rules'),
+
+    updatePricingRule: (conditionCategory: string, level: number, multiplier: number) =>
+        invokeCommand<void>('update_pricing_rule', { conditionCategory, level, multiplier }),
+
+    recalculatePrices: (auctionId: string, vendorCosts: Record<string, number>, conditionMargins: Record<string, number>) =>
+        invokeCommand<number>('recalculate_prices', { auctionId, vendorCosts, conditionMargins }),
+
+    // Buy-backers
+    getBuybackers: () =>
+        invokeCommand<Buybacker[]>('get_buybackers'),
+
+    addBuybacker: (name: string) =>
+        invokeCommand<string>('add_buybacker', { name }),
+
+    updateBuybacker: (id: string, name: string) =>
+        invokeCommand<void>('update_buybacker', { id, name }),
+
+    deleteBuybacker: (id: string) =>
+        invokeCommand<void>('delete_buybacker', { id }),
+
+    // Item history (Repeaters)
+    getItemHistory: (normalizedTitle: string) =>
+        invokeCommand<ItemHistoryEntry[]>('get_item_history', { normalizedTitle }),
+
+    // Auction management
+    renameAuction: (auctionId: string, name: string) =>
+        invokeCommand<void>('rename_auction', { auctionId, name }),
+
+    deleteAuction: (auctionId: string) =>
+        invokeCommand<void>('delete_auction', { auctionId }),
+        
+    // Maintenance
+    wipeDatabase: () =>
+        invokeCommand<void>('wipe_database'),
 };
 
 // ----------------------------------------------------------------------------

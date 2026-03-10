@@ -99,13 +99,14 @@ fn import_manifest(
 
         let item_id = uuid::Uuid::new_v4().to_string();
         let status = if auction_id.is_some() { "Listed" } else { "InStock" };
+        let condition = csv_parser::extract_and_normalize_condition(&row.description);
 
         db.conn
             .execute(
                 "INSERT INTO inventory_items
                  (id, manifest_id, lot_number, raw_title, vendor_code, source,
-                  retail_price, cost_price, min_price, quantity, current_status, auction_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  retail_price, cost_price, min_price, quantity, current_status, auction_id, condition)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
                     item_id,
                     manifest_id,
@@ -118,7 +119,8 @@ fn import_manifest(
                     min_price,
                     row.quantity.parse::<i32>().unwrap_or(1),
                     status,
-                    auction_id.as_ref()
+                    auction_id.as_ref(),
+                    condition
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -308,6 +310,382 @@ fn save_binary_file(
 }
 
 // ============================================================
+// Condition Types Commands
+// ============================================================
+
+#[derive(Debug, Serialize)]
+pub struct ConditionType {
+    pub id: String,
+    pub label: String,
+    pub category: String,
+}
+
+#[tauri::command]
+fn get_condition_types(state: tauri::State<AppState>) -> Result<Vec<ConditionType>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = db.conn.prepare(
+        "SELECT id, label, category FROM condition_types ORDER BY category, label"
+    ).map_err(|e| e.to_string())?;
+
+    let types = stmt.query_map([], |row| {
+        Ok(ConditionType {
+            id: row.get(0)?,
+            label: row.get(1)?,
+            category: row.get(2)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string())?;
+
+    Ok(types)
+}
+
+// ============================================================
+// Source Types Commands
+// ============================================================
+
+#[derive(Debug, Serialize)]
+pub struct SourceType {
+    pub id: String,
+    pub name: String,
+}
+
+#[tauri::command]
+fn get_source_types(state: tauri::State<AppState>) -> Result<Vec<SourceType>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = db.conn.prepare(
+        "SELECT id, name FROM source_types ORDER BY name"
+    ).map_err(|e| e.to_string())?;
+
+    let types = stmt.query_map([], |row| {
+        Ok(SourceType {
+            id: row.get(0)?,
+            name: row.get(1)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string())?;
+
+    Ok(types)
+}
+
+#[tauri::command]
+fn add_source_type(name: String, state: tauri::State<AppState>) -> Result<String, String> {
+    let mut db = state.db.lock().map_err(|e| e.to_string())?;
+    let id = name.to_lowercase().replace(' ', "_");
+    
+    // Begin transaction
+    let tx = db.conn.transaction().map_err(|e| e.to_string())?;
+    
+    tx.execute(
+        "INSERT OR IGNORE INTO source_types (id, name) VALUES (?1, ?2)",
+        rusqlite::params![id, name],
+    ).map_err(|e| e.to_string())?;
+    
+    tx.execute(
+        "INSERT OR IGNORE INTO vendors (id, name, cost_coefficient, min_price_margin, is_active) VALUES (?1, ?2, 0.15, 0.10, 1)",
+        rusqlite::params![id, name],
+    ).map_err(|e| e.to_string())?;
+    
+    tx.commit().map_err(|e| e.to_string())?;
+    
+    Ok(id)
+}
+
+#[tauri::command]
+fn delete_source_type(name: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut db = state.db.lock().map_err(|e| e.to_string())?;
+    let id = name.to_lowercase().replace(' ', "_");
+    
+    let tx = db.conn.transaction().map_err(|e| e.to_string())?;
+    
+    tx.execute(
+        "DELETE FROM source_types WHERE name = ?1 OR id = ?2",
+        rusqlite::params![name, id],
+    ).map_err(|e| e.to_string())?;
+    
+    tx.execute(
+        "DELETE FROM vendors WHERE name = ?1 OR id = ?2",
+        rusqlite::params![name, id],
+    ).map_err(|e| e.to_string())?;
+    
+    tx.commit().map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+// ============================================================
+// Item Field Update Commands
+// ============================================================
+
+#[tauri::command]
+fn update_item_condition(
+    item_id: String,
+    condition: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "UPDATE inventory_items SET condition = ?1 WHERE id = ?2",
+        rusqlite::params![condition, item_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_item_source(
+    item_id: String,
+    source: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "UPDATE inventory_items SET source = ?1 WHERE id = ?2",
+        rusqlite::params![source, item_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_item_sale_order(
+    item_id: String,
+    sale_order: i32,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "UPDATE inventory_items SET sale_order = ?1 WHERE id = ?2",
+        rusqlite::params![sale_order, item_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_item_buybacker(
+    item_id: String,
+    buybacker_id: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "UPDATE inventory_items SET buybacker_id = ?1 WHERE id = ?2",
+        rusqlite::params![buybacker_id, item_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================
+// Pricing Rules Commands
+// ============================================================
+
+#[tauri::command]
+fn get_pricing_rules(state: tauri::State<AppState>) -> Result<Vec<pricing::PricingRule>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pricing::get_pricing_rules(&db.conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_pricing_rule(
+    condition_category: String,
+    level: i32,
+    multiplier: f64,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pricing::update_pricing_rule(&db.conn, &condition_category, level, multiplier)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn recalculate_prices(
+    auction_id: String,
+    vendor_costs: std::collections::HashMap<String, f64>,
+    condition_margins: std::collections::HashMap<String, f64>,
+    state: tauri::State<AppState>,
+) -> Result<i32, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    // Get all items in the auction
+    let mut stmt = db.conn.prepare(
+        "SELECT id, retail_price, source, condition FROM inventory_items WHERE auction_id = ?1"
+    ).map_err(|e| e.to_string())?;
+
+    struct ItemData { id: String, retail: f64, source: String, condition: String }
+    let items: Vec<ItemData> = stmt.query_map(
+        rusqlite::params![auction_id],
+        |row| Ok(ItemData {
+            id: row.get(0)?,
+            retail: row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
+            source: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "".to_string()),
+            condition: row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "New".to_string()),
+        })
+    ).map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string())?;
+
+    let mut count = 0;
+    for item in &items {
+        let cost_pct = vendor_costs.get(&item.source).copied().unwrap_or(0.15); // default 15%
+        let cost_price = (item.retail * cost_pct * 100.0).round() / 100.0;
+
+        let margin_pct = condition_margins.get(&item.condition).copied().unwrap_or(0.10); // default 10%
+        let new_min_price = (cost_price + (item.retail * margin_pct)).ceil();
+
+        db.conn.execute(
+            "UPDATE inventory_items SET min_price = ?1, cost_price = ?2 WHERE id = ?3",
+            rusqlite::params![new_min_price, cost_price, item.id],
+        ).map_err(|e| e.to_string())?;
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+// ============================================================
+// Buy-backer Commands
+// ============================================================
+
+#[derive(Debug, Serialize)]
+pub struct Buybacker {
+    pub id: String,
+    pub name: String,
+    pub is_active: bool,
+}
+
+#[tauri::command]
+fn get_buybackers(state: tauri::State<AppState>) -> Result<Vec<Buybacker>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = db.conn.prepare(
+        "SELECT id, name, is_active FROM buybackers ORDER BY name"
+    ).map_err(|e| e.to_string())?;
+
+    let items = stmt.query_map([], |row| {
+        Ok(Buybacker {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            is_active: row.get(2)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string())?;
+
+    Ok(items)
+}
+
+#[tauri::command]
+fn add_buybacker(
+    name: String,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    db.conn.execute(
+        "INSERT INTO buybackers (id, name) VALUES (?1, ?2)",
+        rusqlite::params![id, name],
+    ).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
+fn update_buybacker(
+    id: String,
+    name: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "UPDATE buybackers SET name = ?1 WHERE id = ?2",
+        rusqlite::params![name, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_buybacker(
+    id: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.conn.execute(
+        "DELETE FROM buybackers WHERE id = ?1",
+        rusqlite::params![id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================
+// Item History (Repeaters) Command
+// ============================================================
+
+#[derive(Debug, Serialize)]
+pub struct ItemHistoryEntry {
+    pub auction_name: String,
+    pub lot_number: Option<String>,
+    pub high_bid: f64,
+    pub sale_date: String,
+    pub bidder_name: String,
+    pub is_buyback: bool,
+}
+
+#[tauri::command]
+fn get_item_history(
+    normalized_title: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<ItemHistoryEntry>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = db.conn.prepare(
+        "SELECT a.name, i.lot_number, ar.high_bid, 
+                COALESCE(i.sold_at, ar.created_at) as sale_date,
+                ar.winning_bidder, ar.is_buyback
+         FROM auction_results ar
+         JOIN inventory_items i ON ar.item_id = i.id
+         JOIN auctions a ON ar.auction_id = a.id
+         WHERE i.normalized_title = ?1
+         ORDER BY ar.created_at DESC
+         LIMIT 20"
+    ).map_err(|e| e.to_string())?;
+
+    let entries = stmt.query_map(
+        rusqlite::params![normalized_title],
+        |row| Ok(ItemHistoryEntry {
+            auction_name: row.get(0)?,
+            lot_number: row.get(1)?,
+            high_bid: row.get(2)?,
+            sale_date: row.get(3)?,
+            bidder_name: row.get(4)?,
+            is_buyback: row.get(5)?,
+        })
+    ).map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string())?;
+
+    Ok(entries)
+}
+
+// ============================================================
+// Maintenance Commands
+// ============================================================
+
+#[tauri::command]
+fn wipe_database(state: tauri::State<AppState>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    
+    db.conn.execute_batch(
+        "
+        DELETE FROM auction_reports;
+        DELETE FROM auction_results;
+        DELETE FROM historical_sales;
+        DELETE FROM inventory_items;
+        DELETE FROM auctions;
+        DELETE FROM manifests;
+        PRAGMA optimize;
+        "
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -316,7 +694,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .init();
 
-    log::info!("Starting Sugarland application v0.2.0");
+    log::info!("Starting Sugarland application v0.3.0");
 
     let db = Database::new("sugarland.db").expect("Failed to initialize database");
 
@@ -338,6 +716,27 @@ fn main() {
             update_item_status,
             get_setting,
             save_setting,
+            // Condition / Source types
+            get_condition_types,
+            get_source_types,
+            add_source_type,
+            delete_source_type,
+            // Item field updates
+            update_item_condition,
+            update_item_source,
+            update_item_sale_order,
+            update_item_buybacker,
+            // Pricing rules
+            get_pricing_rules,
+            update_pricing_rule,
+            recalculate_prices,
+            // Buy-backers
+            get_buybackers,
+            add_buybacker,
+            update_buybacker,
+            delete_buybacker,
+            // Item history (Repeaters)
+            get_item_history,
             // Auctions
             auctions::create_auction,
             auctions::get_auctions,
@@ -349,11 +748,14 @@ fn main() {
             auctions::get_auction_reports,
             auctions::get_all_auction_reports,
             auctions::open_report_file,
+            auctions::rename_auction,
+            auctions::delete_auction,
             // Reconciliation
             reconciliation::reconcile_auction,
             reconciliation::get_pl_report,
             // CSV Validation
             csv_parser::validate_csv,
+            wipe_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

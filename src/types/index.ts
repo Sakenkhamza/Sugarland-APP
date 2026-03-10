@@ -59,11 +59,15 @@ export interface InventoryItem {
     listed_at?: string;
     sold_at?: string;
 
+    // HiBid sync / Buy-backer
+    sale_order?: number;
+    buybacker_id?: string;
+
     created_at: string;
     updated_at: string;
 }
 
-export type ItemStatus = 'InStock' | 'Listed' | 'Sold' | 'Buyback' | 'Scrap';
+export type ItemStatus = 'InStock' | 'Listed' | 'Sold' | 'Unsold' | 'FloorSale' | 'Buyback' | 'Scrap';
 
 // --- Auction ---
 export interface Auction {
@@ -256,4 +260,43 @@ export interface AuctionReport {
 export interface FinishAuctionResult {
     detail_report: string;
     summary_report: string;
+}
+
+// --- Condition Types ---
+export interface ConditionType {
+    id: string;
+    label: string;
+    category: string;
+}
+
+// --- Source Types ---
+export interface SourceType {
+    id: string;
+    name: string;
+}
+
+// --- Pricing Rules ---
+export interface PricingRule {
+    id: number;
+    condition_category: string;
+    level: number;
+    multiplier: number;
+    label?: string;
+}
+
+// --- Buy-backer ---
+export interface Buybacker {
+    id: string;
+    name: string;
+    is_active: boolean;
+}
+
+// --- Item History (Repeaters) ---
+export interface ItemHistoryEntry {
+    auction_name: string;
+    lot_number?: string;
+    high_bid: number;
+    sale_date: string;
+    bidder_name: string;
+    is_buyback: boolean;
 }

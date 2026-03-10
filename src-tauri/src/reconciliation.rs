@@ -44,15 +44,23 @@ impl ReconciliationManager {
 
         let tx = db.conn.unchecked_transaction().map_err(|e| e.to_string())?;
 
-        // Load buyback bidder ID from settings
-        let buyback_bidder_id: String = db.conn.query_row(
+        // Load all active buybacker names from the buybackers table
+        let mut bb_stmt = db.conn.prepare(
+            "SELECT name FROM buybackers WHERE is_active = TRUE"
+        ).map_err(|e| e.to_string())?;
+        let buyback_names: Vec<String> = bb_stmt.query_map([], |row| {
+            row.get::<_, String>(0)
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .map(|n| n.to_lowercase())
+        .collect();
+
+        // Fallback: also check the legacy settings value
+        let legacy_id: String = db.conn.query_row(
             "SELECT value FROM settings WHERE key = 'ron_larsson_bidder_id'",
             [],
             |row| row.get(0),
-        ).unwrap_or_else(|_| {
-            log::warn!("Ron Larsson ID not found in settings, using default '5046'");
-            "5046".to_string()
-        });
+        ).unwrap_or_else(|_| "5046".to_string());
 
         // Load commission rate from settings
         let commission_rate: f64 = db.conn.query_row(
@@ -65,8 +73,9 @@ impl ReconciliationManager {
         ).unwrap_or(0.15);
 
         for row in results {
-            // Check if buyback
-            let is_buyback = row.bidder_id == buyback_bidder_id;
+            // Check if buyback (against buybackers table + legacy setting)
+            let winner_lower = row.winning_bidder.to_lowercase();
+            let is_buyback = buyback_names.iter().any(|bb_name| winner_lower.contains(bb_name)) || row.bidder_id == legacy_id;
             let status = if is_buyback { "Buyback" } else { "Sold" };
             
             let high_bid = csv_parser::clean_price(&row.high_bid);
