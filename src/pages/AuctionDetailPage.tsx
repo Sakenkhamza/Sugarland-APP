@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import type { Auction, InventoryItem, ConditionType, Buybacker, ItemHistoryEntry, Vendor } from '@/types';
-import { ArrowLeft, X, Search, Flag, FileSpreadsheet, Calculator, History, RefreshCw, PlusCircle, AlertCircle, Trash2 } from 'lucide-react';
+import { ArrowLeft, X, Search, Flag, FileSpreadsheet, Calculator, History, RefreshCw, PlusCircle, AlertCircle, Trash2, CheckSquare } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { SortableTableHead } from '@/components/ui/sortable-table-head';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +17,10 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
-import { formatCurrencyWhole, naturalSort } from '@/lib/utils';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { formatCurrencyWhole, formatNumber, naturalSort } from '@/lib/utils';
+import { buildManagerReportFileName } from '@/lib/auctionNaming';
+import { buildManagerReportPreviewRows, buildManagerReportWorkbook, getHistoryHeadersForAuction } from '@/lib/managerReport';
 import { toast } from 'sonner';
 
 // ============================================================
@@ -62,7 +65,7 @@ export function AuctionDetailPage() {
 
     // Pricing calculator
     const [vendorCosts, setVendorCosts] = useState<Record<string, number>>({});
-    const [conditionMargins, setConditionMargins] = useState<Record<string, number>>({});
+    const [conditionMarginsBySupplier, setConditionMarginsBySupplier] = useState<Record<string, Record<string, number>>>({});
     const [showPricingPanel, setShowPricingPanel] = useState(false);
     const [newSupplierName, setNewSupplierName] = useState('');
 
@@ -70,11 +73,18 @@ export function AuctionDetailPage() {
     const [historyItem, setHistoryItem] = useState<string | null>(null);
     const [historyEntries, setHistoryEntries] = useState<ItemHistoryEntry[]>([]);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [repeaterStatsByTitle, setRepeaterStatsByTitle] = useState<Record<string, Record<string, number>>>({});
+
+    // Relist from inventory dialog
+    const [showRelistDialog, setShowRelistDialog] = useState(false);
+    const [relistCandidates, setRelistCandidates] = useState<InventoryItem[]>([]);
+    const [relistLoading, setRelistLoading] = useState(false);
+    const [relistSearch, setRelistSearch] = useState('');
+    const [selectedRelistIds, setSelectedRelistIds] = useState<string[]>([]);
 
     // Filters
     const [searchQuery, setSearchQuery] = useState('');
-    const [statusFilter, setStatusFilter] = useState('all');
-    const [vendorFilter, setVendorFilter] = useState('all');
+
     const [sortConfig, setSortConfig] = useState<{ column: string; direction: 'asc' | 'desc'; pinnedValue?: string } | null>({ column: 'lot_number', direction: 'asc' });
     const handleSort = useCallback((column: string, direction: 'asc' | 'desc', pinnedValue?: string) => {
         setSortConfig({ column, direction, pinnedValue });
@@ -89,6 +99,35 @@ export function AuctionDetailPage() {
     useEffect(() => {
         if (id) loadAuctionData(id);
     }, [id]);
+
+    useEffect(() => {
+        const loadRepeaterStats = async () => {
+            if (!auction || auctionItems.length === 0) {
+                setRepeaterStatsByTitle({});
+                return;
+            }
+            const headers = getHistoryHeadersForAuction(auction.name);
+            const titles = Array.from(
+                new Set(
+                    auctionItems
+                        .map((item) => item.normalized_title?.trim())
+                        .filter((v): v is string => Boolean(v)),
+                ),
+            );
+            if (titles.length === 0) {
+                setRepeaterStatsByTitle({});
+                return;
+            }
+            try {
+                const stats = await api.getItemRepeaterStats(titles, headers);
+                setRepeaterStatsByTitle(stats || {});
+            } catch (err) {
+                console.error('Failed to load repeater stats:', err);
+                setRepeaterStatsByTitle({});
+            }
+        };
+        loadRepeaterStats();
+    }, [auction, auctionItems]);
 
     const loadReferenceData = async () => {
         try {
@@ -121,6 +160,47 @@ export function AuctionDetailPage() {
         }
     };
 
+    const loadRelistCandidates = async (auctionId: string) => {
+        setRelistLoading(true);
+        try {
+            const candidates = await api.getRelistableInventoryItems(auctionId);
+            setRelistCandidates(candidates);
+        } catch (err) {
+            console.error('Failed to load relist candidates:', err);
+            toast.error('Failed to load inventory items for relist');
+            setRelistCandidates([]);
+        } finally {
+            setRelistLoading(false);
+        }
+    };
+
+    const openRelistDialog = async () => {
+        if (!auction) return;
+        setShowRelistDialog(true);
+        setRelistSearch('');
+        setSelectedRelistIds([]);
+        await loadRelistCandidates(auction.id);
+    };
+
+    const toggleRelistItem = (itemId: string) => {
+        setSelectedRelistIds((prev) => (
+            prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]
+        ));
+    };
+
+    const assignSelectedItemsToAuction = async () => {
+        if (!auction || selectedRelistIds.length === 0) return;
+        try {
+            const assigned = await api.assignItemsToAuction(auction.id, selectedRelistIds);
+            toast.success(`Added ${assigned} item(s) to auction`);
+            setShowRelistDialog(false);
+            await loadAuctionData(auction.id);
+        } catch (err) {
+            console.error('Failed to assign items to auction:', err);
+            toast.error('Failed to add selected items to auction');
+        }
+    };
+
     // ============================================================
     // Inline editing handlers
     // ============================================================
@@ -146,14 +226,26 @@ export function AuctionDetailPage() {
     };
 
     const handleAddSupplier = async () => {
-        if (!newSupplierName.trim()) return;
+        const supplierName = newSupplierName.trim();
+        if (!supplierName) return;
         try {
-            await api.addSourceType(newSupplierName.trim());
-            toast.success(`Supplier "${newSupplierName.trim()}" added successfully`);
+            await api.addSourceType(supplierName);
+            toast.success(`Supplier "${supplierName}" added successfully`);
             setNewSupplierName('');
             await loadReferenceData();
             // Automatically add this new supplier to vendorCosts so it shows up immediately
-            setVendorCosts(prev => ({ ...prev, [newSupplierName.trim()]: 0.15 }));
+            setVendorCosts(prev => ({ ...prev, [supplierName]: 0.15 }));
+            setConditionMarginsBySupplier(prev => {
+                const next = { ...prev };
+                if (next[supplierName] === undefined) {
+                    const defaultMargins: Record<string, number> = {};
+                    conditionTypes.forEach(ct => {
+                        defaultMargins[ct.label] = 0.10;
+                    });
+                    next[supplierName] = defaultMargins;
+                }
+                return next;
+            });
         } catch (e) {
             toast.error('Failed to add supplier');
         }
@@ -170,6 +262,14 @@ export function AuctionDetailPage() {
                 delete next[name];
                 return next;
             });
+            setConditionMarginsBySupplier(prev => {
+                const next = { ...prev };
+                delete next[name];
+                return next;
+            });
+            setAuctionItems(prev => prev.map(item => (
+                item.source === name ? { ...item, source: 'Unknown' } : item
+            )));
         } catch (err) {
             toast.error('Failed to delete supplier');
         }
@@ -193,21 +293,25 @@ export function AuctionDetailPage() {
         });
         setVendorCosts(initialCosts);
         
-        const initialMargins: Record<string, number> = { ...conditionMargins };
-        conditionTypes.forEach(c => {
-             if (initialMargins[c.label] === undefined) {
-                  initialMargins[c.label] = 0.10;
-             }
+        const initialMarginsBySupplier: Record<string, Record<string, number>> = { ...conditionMarginsBySupplier };
+        uniqueSources.forEach(source => {
+            const sourceMargins: Record<string, number> = { ...(initialMarginsBySupplier[source] || {}) };
+            conditionTypes.forEach(c => {
+                if (sourceMargins[c.label] === undefined) {
+                    sourceMargins[c.label] = 0.10;
+                }
+            });
+            initialMarginsBySupplier[source] = sourceMargins;
         });
-        setConditionMargins(initialMargins);
+        setConditionMarginsBySupplier(initialMarginsBySupplier);
         
-        setShowPricingPanel(!showPricingPanel);
+        setShowPricingPanel(true);
     };
 
     const handleRecalculatePrices = async () => {
         if (!auction) return;
         try {
-            const count = await api.recalculatePrices(auction.id, vendorCosts, conditionMargins);
+            const count = await api.recalculatePrices(auction.id, vendorCosts, conditionMarginsBySupplier);
             toast.success(`Recalculated prices for ${count} items`);
             await loadAuctionData(auction.id);
             setShowPricingPanel(false);
@@ -239,7 +343,7 @@ export function AuctionDetailPage() {
     const handleFinish = async () => {
         if (!auction) return;
         const filePath = await api.selectFile([{ name: 'CSV Files', extensions: ['csv'] }]);
-        if (!filePath) { toast.info('No file selected — auction not finished'); return; }
+        if (!filePath) { toast.info('No file selected - auction not finished'); return; }
 
         setIsUpdatingStatus(true);
         try {
@@ -254,32 +358,16 @@ export function AuctionDetailPage() {
     const handleExportExcel = async () => {
         if (!auction || auctionItems.length === 0) return;
         try {
-            const formattedData = auctionItems.map((item, idx) => {
-                const r = idx + 2;
-                const retail = Math.round(item.retail_price || 0);
-                const cost_pct = (item.retail_price || 0) > 0 ? Math.round(((item.cost_price || 0) / (item.retail_price || 1)) * 100) : 0;
-                return {
-                    'Auction name': auction.name,
-                    'LotNumber': item.lot_number || '',
-                    'Quantity': 1,
-                    'Title': item.raw_title || '',
-                    'Vendor Code': item.source === 'Best Buy' ? 'ATXSUGAR' : '',
-                    'Retail Price': retail,
-                    'Source': item.source || '',
-                    'Condition': item.condition || '',
-                    'cost': (cost_pct / 100),
-                    'cost price': { t: 'n', f: `ROUND(F${r}*I${r}, 2)` },
-                    '% min pr (+10%)': { t: 'n', f: `ROUND(F${r}*0.10, 2)` },
-                    'min price': { t: 'n', f: `CEILING(J${r}+K${r}, 1)` },
-                    'Sale Order': item.sale_order || '',
-                };
+            const workbook = buildManagerReportWorkbook({
+                items: auctionItems,
+                auctionName: auction.name,
+                vendorCosts,
+                conditionMarginsBySupplier,
+                historyHeaders: getHistoryHeadersForAuction(auction.name),
+                repeaterStatsByTitle,
             });
-
-            const worksheet = XLSX.utils.json_to_sheet(formattedData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
             const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-            const defaultName = `${auction.name.replace(/\s+/g, '_')}_Manager_Report.xlsx`;
+            const defaultName = buildManagerReportFileName(auction.name);
             const savePath = await api.saveFile(defaultName);
             if (!savePath) return;
             await api.saveBinaryFile(savePath as string, new Uint8Array(excelBuffer));
@@ -287,6 +375,28 @@ export function AuctionDetailPage() {
         } catch (error) {
             toast.error('Failed to export Excel');
         }
+    };
+
+    const uniqueVendors = Array.from(new Set([
+        ...auctionItems.map(i => i.source).filter(Boolean),
+        ...vendors.map(v => v.name)
+    ])) as string[];
+    const pricingVendors = uniqueVendors.filter(v => v !== 'Unknown');
+
+    const handleResetConditionMargins = () => {
+        if (!window.confirm('Reset all condition margins to 10% for all suppliers?')) return;
+        setConditionMarginsBySupplier(prev => {
+            const next = { ...prev };
+            pricingVendors.forEach(vendor => {
+                const supplierMargins = { ...(next[vendor] || {}) };
+                conditionTypes.forEach(ct => {
+                    supplierMargins[ct.label] = 0.10;
+                });
+                next[vendor] = supplierMargins;
+            });
+            return next;
+        });
+        toast.success('Condition margins reset to 10%');
     };
 
     // ============================================================
@@ -300,54 +410,119 @@ export function AuctionDetailPage() {
     // ============================================================
     const totalRetail = auctionItems.reduce((acc, item) => acc + (item.retail_price || 0), 0);
     const estRevenue = auctionItems.reduce((acc, item) => acc + (item.min_price || 0), 0);
+    const historyHeaders = getHistoryHeadersForAuction(auction.name);
+    const relistFilteredItems = relistCandidates.filter((item) => {
+        const q = relistSearch.trim().toLowerCase();
+        if (!q) return true;
+        return (
+            item.raw_title.toLowerCase().includes(q) ||
+            (item.lot_number || '').toLowerCase().includes(q) ||
+            (item.source || '').toLowerCase().includes(q)
+        );
+    });
+    const selectedRelistSet = new Set(selectedRelistIds);
+    const selectedVisibleCount = relistFilteredItems.reduce((count, item) => (
+        count + (selectedRelistSet.has(item.id) ? 1 : 0)
+    ), 0);
 
-    const filteredItems = auctionItems.filter(item => {
-        const matchesSearch = item.raw_title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            item.lot_number?.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || item.current_status === statusFilter;
-        const matchesVendor = vendorFilter === 'all' || item.source === vendorFilter;
-        return matchesSearch && matchesStatus && matchesVendor;
+    const reportPreviewRows = buildManagerReportPreviewRows({
+        items: auctionItems,
+        auctionName: auction.name,
+        vendorCosts,
+        conditionMarginsBySupplier,
+        historyHeaders,
+        repeaterStatsByTitle,
     });
 
-    const sortedItems = [...filteredItems].sort((a, b) => {
+    const filteredRows = reportPreviewRows.filter(row => {
+        return row.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            row.lotNumber.toLowerCase().includes(searchQuery.toLowerCase());
+    });
+
+    const sortedRows = [...filteredRows].sort((a, b) => {
         if (!sortConfig) return 0;
         const { column, direction, pinnedValue } = sortConfig;
 
-        // Pinned value logic (only for Source column for now as per request)
+        // Pinned value logic for Source column.
         if (column === 'source' && pinnedValue) {
-            const aIsPinned = a.source === pinnedValue;
-            const bIsPinned = b.source === pinnedValue;
+            const isUnspecified = (s: string | undefined | null) => !s || s === 'Unknown';
+            const aIsPinned = pinnedValue === 'Unknown' ? isUnspecified(a.source) : a.source === pinnedValue;
+            const bIsPinned = pinnedValue === 'Unknown' ? isUnspecified(b.source) : b.source === pinnedValue;
             if (aIsPinned && !bIsPinned) return -1;
             if (!aIsPinned && bIsPinned) return 1;
         }
 
-        let aVal: any;
-        let bVal: any;
+        let aVal: string | number = 0;
+        let bVal: string | number = 0;
         switch (column) {
-            case 'lot_number': return direction === 'asc' ? naturalSort(a.lot_number || '', b.lot_number || '') : naturalSort(b.lot_number || '', a.lot_number || '');
-            case 'raw_title': aVal = a.raw_title.toLowerCase(); bVal = b.raw_title.toLowerCase(); break;
-            case 'condition': aVal = (a.condition || '').toLowerCase(); bVal = (b.condition || '').toLowerCase(); break;
-            case 'source': aVal = (a.source || '').toLowerCase(); bVal = (b.source || '').toLowerCase(); break;
-            case 'retail_price': aVal = a.retail_price || 0; bVal = b.retail_price || 0; break;
-            case 'cost_pct': aVal = a.retail_price ? (a.cost_price || 0) / a.retail_price : 0; bVal = b.retail_price ? (b.cost_price || 0) / b.retail_price : 0; break;
-            case 'cost_price': aVal = a.cost_price || 0; bVal = b.cost_price || 0; break;
-            case 'min_pr_10': aVal = a.retail_price ? a.retail_price * 0.10 : 0; bVal = b.retail_price ? b.retail_price * 0.10 : 0; break;
-            case 'min_price': aVal = a.min_price || 0; bVal = b.min_price || 0; break;
-            case 'buybacker': aVal = (a.buybacker_id || '').toLowerCase(); bVal = (b.buybacker_id || '').toLowerCase(); break;
-            case 'current_status': aVal = a.current_status.toLowerCase(); bVal = b.current_status.toLowerCase(); break;
-            case 'sale_order': aVal = a.sale_order || 9999; bVal = b.sale_order || 9999; break;
-            default: return 0;
+            case 'lot_number':
+                return direction === 'asc'
+                    ? naturalSort(a.lotNumber, b.lotNumber)
+                    : naturalSort(b.lotNumber, a.lotNumber);
+            case 'sale_order':
+                aVal = a.saleOrder === '' ? 9999 : Number(a.saleOrder);
+                bVal = b.saleOrder === '' ? 9999 : Number(b.saleOrder);
+                break;
+            case 'title':
+                aVal = a.title.toLowerCase();
+                bVal = b.title.toLowerCase();
+                break;
+            case 'retail_price':
+                aVal = a.retailPrice;
+                bVal = b.retailPrice;
+                break;
+            case 'source':
+                aVal = a.source.toLowerCase();
+                bVal = b.source.toLowerCase();
+                break;
+            case 'condition':
+                aVal = a.condition.toLowerCase();
+                bVal = b.condition.toLowerCase();
+                break;
+            case 'cost_pct':
+                aVal = a.costPct;
+                bVal = b.costPct;
+                break;
+            case 'min_price_pct':
+                aVal = a.minPricePct;
+                bVal = b.minPricePct;
+                break;
+            case 'cost_price':
+                aVal = a.costPrice;
+                bVal = b.costPrice;
+                break;
+            case 'min_price_half':
+                aVal = a.minPriceHalf;
+                bVal = b.minPriceHalf;
+                break;
+            case 'min_price_one':
+                aVal = a.minPriceOne;
+                bVal = b.minPriceOne;
+                break;
+            case 'repeat':
+                aVal = a.repeat;
+                bVal = b.repeat;
+                break;
+            case 'buybacker':
+                aVal = (a.item.buybacker_id || '').toLowerCase();
+                bVal = (b.item.buybacker_id || '').toLowerCase();
+                break;
+            case 'current_status':
+                aVal = a.item.current_status.toLowerCase();
+                bVal = b.item.current_status.toLowerCase();
+                break;
+            default:
+                break;
+        }
+        if (historyHeaders.includes(column)) {
+            aVal = a.historyBySeason[column] ?? 0;
+            bVal = b.historyBySeason[column] ?? 0;
         }
         if (aVal < bVal) return direction === 'asc' ? -1 : 1;
         if (aVal > bVal) return direction === 'asc' ? 1 : -1;
         return 0;
     });
-
-    const uniqueVendors = Array.from(new Set([
-        ...auctionItems.map(i => i.source).filter(Boolean),
-        ...vendors.map(v => v.name)
-    ])) as string[];
-    const pricingVendors = uniqueVendors.filter(v => v !== 'Unknown');
+    const tableColumnCount = 14 + historyHeaders.length + (auction.status === 'Completed' ? 1 : 0);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -386,14 +561,6 @@ export function AuctionDetailPage() {
                     </div>
                 </div>
                 <div className="flex gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleOpenPricingPanel}
-                    >
-                        <Calculator className="mr-2 h-4 w-4" />
-                        Pricing
-                    </Button>
                     {['Active', 'Completed'].includes(auction.status) && (
                         <Button
                             variant="default"
@@ -418,128 +585,302 @@ export function AuctionDetailPage() {
                 </div>
             </div>
 
-            {/* Pricing Calculator Panel */}
-            {showPricingPanel && (
-                <Card className="border-amber-200 bg-amber-50/30 dark:bg-amber-950/20 animate-fade-in">
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-base flex items-center gap-2">
+            <Dialog open={showPricingPanel} onOpenChange={setShowPricingPanel}>
+                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
                             <Calculator className="h-4 w-4" />
                             Dynamic Pricing Calculator
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            {/* Cost Settings */}
-                            <div>
-                                <h4 className="text-sm font-semibold mb-3">Supplier Cost Percentage</h4>
-                                <div className="space-y-2">
-                                    {pricingVendors.length === 0 ? (
-                                        <p className="text-xs text-muted-foreground">No suppliers found in this auction.</p>
-                                    ) : (
-                                        pricingVendors.map(vendor => (
-                                            <div key={vendor} className="flex items-center justify-between bg-background border rounded px-3 py-2 group">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-medium">{vendor}</span>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-5 w-5 text-muted-foreground hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                        onClick={() => handleDeleteSupplier(vendor)}
-                                                    >
-                                                        <Trash2 className="h-3 w-3" />
-                                                    </Button>
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    <Input
-                                                        type="number"
-                                                        step="1"
-                                                        className="w-16 h-7 text-xs text-center"
-                                                        value={vendorCosts[vendor] !== undefined ? Math.round(vendorCosts[vendor] * 100) : 15}
-                                                        onChange={(e) => {
-                                                            const val = parseFloat(e.target.value);
-                                                            if (!isNaN(val)) {
-                                                                setVendorCosts(prev => ({ ...prev, [vendor]: val / 100 }));
-                                                            }
-                                                        }}
-                                                    />
-                                                    <span className="text-sm">%</span>
-                                                </div>
+                        </DialogTitle>
+                        <DialogDescription>
+                            Configure supplier costs and condition margins, then recalculate minimum prices.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-8">
+                        <div>
+                            <h4 className="text-sm font-semibold mb-3">Supplier Cost Percentage</h4>
+                            <div className="space-y-2">
+                                {pricingVendors.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">No suppliers found in this auction.</p>
+                                ) : (
+                                    pricingVendors.map(vendor => (
+                                        <div key={vendor} className="flex items-center justify-between bg-background border rounded px-3 py-2 group">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm font-medium">{vendor}</span>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-5 w-5 text-muted-foreground hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    onClick={() => handleDeleteSupplier(vendor)}
+                                                >
+                                                    <Trash2 className="h-3 w-3" />
+                                                </Button>
                                             </div>
-                                        ))
-                                    )}
-                                </div>
-                                <div className="mt-4 border border-dashed rounded-lg p-2">
-                                    <div className="flex gap-2 w-full">
-                                        <Input
-                                            value={newSupplierName}
-                                            onChange={(e) => setNewSupplierName(e.target.value)}
-                                            placeholder="New supplier name"
-                                            className="h-9 text-sm w-full bg-background"
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') handleAddSupplier();
-                                            }}
-                                        />
-                                        <Button
-                                            size="sm"
-                                            onClick={handleAddSupplier}
-                                            className="h-9 shrink-0 bg-muted-foreground/80 hover:bg-muted-foreground text-primary-foreground"
-                                        >
-                                            <PlusCircle className="mr-2 h-4 w-4" />
-                                            Add
-                                        </Button>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            
-                            {/* Margin Settings */}
-                            <div>
-                                <h4 className="text-sm font-semibold mb-3">Condition Margin Percentage</h4>
-                                <div className="space-y-2">
-                                    {conditionTypes.map(ct => (
-                                        <div key={ct.id} className="flex items-center justify-between bg-background border rounded px-3 py-2">
-                                            <span className="text-sm font-medium">{ct.label}</span>
                                             <div className="flex items-center gap-1">
                                                 <Input
                                                     type="number"
                                                     step="1"
                                                     className="w-16 h-7 text-xs text-center"
-                                                    value={conditionMargins[ct.label] !== undefined ? Math.round(conditionMargins[ct.label] * 100) : 10}
+                                                    value={vendorCosts[vendor] !== undefined ? Math.round(vendorCosts[vendor] * 100) : 15}
                                                     onChange={(e) => {
                                                         const val = parseFloat(e.target.value);
                                                         if (!isNaN(val)) {
-                                                            setConditionMargins(prev => ({ ...prev, [ct.label]: val / 100 }));
+                                                            setVendorCosts(prev => ({ ...prev, [vendor]: val / 100 }));
                                                         }
                                                     }}
                                                 />
                                                 <span className="text-sm">%</span>
                                             </div>
                                         </div>
-                                    ))}
+                                    ))
+                                )}
+                            </div>
+                            <div className="mt-4 border border-dashed rounded-lg p-2">
+                                <div className="flex gap-2 w-full">
+                                    <Input
+                                        value={newSupplierName}
+                                        onChange={(e) => setNewSupplierName(e.target.value)}
+                                        placeholder="New supplier name"
+                                        className="h-9 text-sm w-full bg-background"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleAddSupplier();
+                                        }}
+                                    />
+                                    <Button
+                                        size="sm"
+                                        onClick={handleAddSupplier}
+                                        className="h-9 shrink-0 bg-muted-foreground/80 hover:bg-muted-foreground text-primary-foreground"
+                                    >
+                                        <PlusCircle className="mr-2 h-4 w-4" />
+                                        Add
+                                    </Button>
                                 </div>
                             </div>
                         </div>
-                        <div className="mt-6 flex flex-col sm:flex-row items-center justify-between border-t border-amber-200/50 pt-4">
-                            <div className="text-sm text-balance max-w-lg space-y-1">
-                                <p className="font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-2">
-                                    <Calculator className="h-4 w-4" /> Calculations
-                                </p>
-                                <ul className="list-disc list-inside text-xs text-muted-foreground ml-1">
-                                    <li><span className="font-medium text-foreground">Cost Price</span> = <span className="font-mono bg-muted px-1 rounded">Retail Price</span> &times; <span className="font-mono bg-amber-500/20 px-1 rounded text-amber-900 dark:text-amber-200">[Supplier Cost %]</span></li>
-                                    <li><span className="font-medium text-foreground">Min Price</span> = <span className="font-medium text-foreground">Cost Price</span> + (<span className="font-mono bg-muted px-1 rounded">Retail Price</span> &times; <span className="font-mono bg-amber-500/20 px-1 rounded text-amber-900 dark:text-amber-200">[Condition Margin %]</span>)</li>
-                                </ul>
+
+                        <div>
+                            <div className="flex items-center justify-between mb-3 gap-3">
+                                <h4 className="text-sm font-semibold">Condition Margin Matrix (%)</h4>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-3 text-xs"
+                                    onClick={handleResetConditionMargins}
+                                >
+                                    Reset to 10%
+                                </Button>
                             </div>
-                            <Button
-                                className="bg-amber-600 hover:bg-amber-700 mt-4 sm:mt-0 shadow-sm"
-                                onClick={handleRecalculatePrices}
-                            >
+                            {pricingVendors.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No suppliers available for margin setup.</p>
+                            ) : conditionTypes.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No condition types configured.</p>
+                            ) : (
+                                <div className="overflow-x-auto rounded-lg border bg-background">
+                                    <table className="min-w-full text-xs">
+                                        <thead className="bg-muted/40">
+                                            <tr className="border-b">
+                                                <th className="text-left font-semibold px-3 py-2 min-w-[220px] border-r border-border/60">Condition</th>
+                                                {pricingVendors.map(vendor => (
+                                                    <th key={vendor} className="text-center font-semibold px-2 py-2 min-w-[120px] border-r border-border/60 last:border-r-0">
+                                                        {vendor}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {conditionTypes.map((ct, idx) => (
+                                                <tr key={ct.id} className={`border-b ${idx % 2 === 1 ? 'bg-muted/20' : ''}`}>
+                                                    <td className="px-3 py-2 text-sm font-medium border-r border-border/60">{ct.label}</td>
+                                                    {pricingVendors.map(vendor => (
+                                                        <td key={`${ct.id}-${vendor}`} className="px-2 py-1.5 text-center border-r border-border/60 last:border-r-0">
+                                                            <div className="inline-flex items-center gap-1">
+                                                                <Input
+                                                                    type="number"
+                                                                    step="1"
+                                                                    className="w-16 h-7 text-xs text-center"
+                                                                    value={conditionMarginsBySupplier[vendor]?.[ct.label] !== undefined
+                                                                        ? Math.round(conditionMarginsBySupplier[vendor][ct.label] * 100)
+                                                                        : 10}
+                                                                    onChange={(e) => {
+                                                                        const val = parseFloat(e.target.value);
+                                                                        if (!isNaN(val)) {
+                                                                            setConditionMarginsBySupplier(prev => ({
+                                                                                ...prev,
+                                                                                [vendor]: {
+                                                                                    ...(prev[vendor] || {}),
+                                                                                    [ct.label]: val / 100
+                                                                                }
+                                                                            }));
+                                                                        }
+                                                                    }}
+                                                                />
+                                                                <span className="text-xs text-muted-foreground">%</span>
+                                                            </div>
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                            <p className="text-[11px] text-muted-foreground mt-2">
+                                Each cell defines margin for a specific supplier/condition pair.
+                            </p>
+                        </div>
+
+                        <div className="border rounded-lg p-3 bg-muted/20">
+                            <p className="font-semibold text-sm flex items-center gap-2">
+                                <Calculator className="h-4 w-4" />
+                                Calculations
+                            </p>
+                            <ul className="list-disc list-inside text-xs text-muted-foreground mt-1">
+                                <li><span className="font-medium text-foreground">Cost Price</span> = <span className="font-mono bg-muted px-1 rounded">Retail Price</span> &times; <span className="font-mono bg-muted px-1 rounded">[Supplier Cost %]</span></li>
+                                <li><span className="font-medium text-foreground">Min Price</span> = <span className="font-medium text-foreground">Cost Price</span> + (<span className="font-mono bg-muted px-1 rounded">Retail Price</span> &times; <span className="font-mono bg-muted px-1 rounded">[Condition Margin %]</span>)</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <div className="flex w-full items-center justify-end gap-2">
+                            <Button type="button" variant="outline" onClick={() => setShowPricingPanel(false)}>
+                                Cancel
+                            </Button>
+                            <Button onClick={handleRecalculatePrices}>
                                 <RefreshCw className="mr-2 h-4 w-4" />
                                 Recalculate {auctionItems.length} Items
                             </Button>
                         </div>
-                    </CardContent>
-                </Card>
-            )}
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={showRelistDialog} onOpenChange={setShowRelistDialog}>
+                <DialogContent className="max-w-5xl">
+                    <DialogHeader>
+                        <DialogTitle>Add Items From Inventory</DialogTitle>
+                        <DialogDescription>
+                            Select unsold or buyback inventory items and add them to this active auction.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-3">
+                        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                            <Input
+                                placeholder="Search by lot, title, source..."
+                                value={relistSearch}
+                                onChange={(e) => setRelistSearch(e.target.value)}
+                            />
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        const visibleIds = relistFilteredItems.map((item) => item.id);
+                                        setSelectedRelistIds(Array.from(new Set([...selectedRelistIds, ...visibleIds])));
+                                    }}
+                                    disabled={relistFilteredItems.length === 0}
+                                >
+                                    Select All
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        const visibleSet = new Set(relistFilteredItems.map((item) => item.id));
+                                        setSelectedRelistIds((prev) => prev.filter((id) => !visibleSet.has(id)));
+                                    }}
+                                    disabled={selectedVisibleCount === 0}
+                                >
+                                    Clear Visible
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="max-h-[420px] overflow-auto rounded-lg border">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className="w-[60px] text-center">Pick</TableHead>
+                                        <TableHead className="w-[110px]">Lot</TableHead>
+                                        <TableHead>Title</TableHead>
+                                        <TableHead className="w-[130px]">Status</TableHead>
+                                        <TableHead className="w-[130px]">Source</TableHead>
+                                        <TableHead className="w-[120px] text-right">Min Price</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {relistLoading ? (
+                                        <TableRow>
+                                            <TableCell colSpan={6} className="h-20 text-center text-muted-foreground">
+                                                Loading inventory...
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : relistFilteredItems.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={6} className="h-20 text-center text-muted-foreground">
+                                                No relistable items found
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        relistFilteredItems.map((item) => {
+                                            const isSelected = selectedRelistSet.has(item.id);
+                                            return (
+                                                <TableRow key={item.id}>
+                                                    <TableCell className="text-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isSelected}
+                                                            onChange={() => toggleRelistItem(item.id)}
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell className="font-mono">{item.lot_number || '-'}</TableCell>
+                                                    <TableCell className="max-w-[520px]">
+                                                        <div className="truncate">{item.raw_title}</div>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge variant="secondary" className={getStatusColor(item.current_status)}>
+                                                            {item.current_status}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell>{item.source || '-'}</TableCell>
+                                                    <TableCell className="text-right font-mono">
+                                                        {formatNumber(Math.round(item.min_price || 0))}
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        })
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <div className="flex w-full items-center justify-between">
+                            <div className="text-xs text-muted-foreground">
+                                Selected: {selectedRelistIds.length}
+                            </div>
+                            <div className="flex gap-2">
+                                <Button type="button" variant="outline" onClick={() => setShowRelistDialog(false)}>
+                                    Cancel
+                                </Button>
+                                <Button
+                                    type="button"
+                                    onClick={assignSelectedItemsToAuction}
+                                    disabled={selectedRelistIds.length === 0}
+                                >
+                                    Add Selected
+                                </Button>
+                            </div>
+                        </div>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* KPI Section */}
             <div className="grid gap-4 md:grid-cols-3">
@@ -619,7 +960,7 @@ export function AuctionDetailPage() {
             )}
 
             {/* Auction Items Section */}
-            <Card>
+            <Card className="border-emerald-200/70 shadow-sm">
                 <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <CardTitle>Auction Items</CardTitle>
@@ -633,174 +974,190 @@ export function AuctionDetailPage() {
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                 />
                             </div>
-
-                            <select
-                                className="flex h-10 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                                value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value)}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleOpenPricingPanel}
                             >
-                                <option value="all">All Statuses</option>
-                                <option value="Listed">Listed</option>
-                                <option value="Sold">Sold</option>
-                                <option value="Buyback">Buyback</option>
-                                <option value="FloorSale">Floor Sale</option>
-                                <option value="Unsold">Unsold</option>
-                                <option value="Scrap">Scrap</option>
-                            </select>
-                            {uniqueVendors.length > 0 && (
-                                <select
-                                    className="flex h-10 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                                    value={vendorFilter}
-                                    onChange={(e) => setVendorFilter(e.target.value)}
+                                <Calculator className="mr-2 h-4 w-4" />
+                                Pricing
+                            </Button>
+                            {auction.status === 'Active' && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={openRelistDialog}
                                 >
-                                    <option value="all">All Vendors</option>
-                                    <option value="Unknown">Unknown / Unspecified</option>
-                                    {pricingVendors.map(v => (
-                                        <option key={v} value={v}>{v}</option>
-                                    ))}
-                                </select>
+                                    <CheckSquare className="mr-2 h-4 w-4" />
+                                    Add From Inventory
+                                </Button>
                             )}
                         </div>
                     </div>
                 </CardHeader>
                 <CardContent>
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <SortableTableHead column="lot_number" label="Lot #" sortConfig={sortConfig} onSort={handleSort} className="w-[80px]" isText />
-                                    <SortableTableHead column="raw_title" label="Title" sortConfig={sortConfig} onSort={handleSort} isText />
-                                    <SortableTableHead column="condition" label="Condition" sortConfig={sortConfig} onSort={handleSort} className="w-[140px]" isText />
+                    <div className="overflow-x-auto rounded-xl border border-emerald-200/80 bg-gradient-to-b from-emerald-50/30 to-background shadow-inner">
+                        <Table className="min-w-[2500px] text-xs border-separate border-spacing-0">
+                            <TableHeader className="sticky top-0 z-10">
+                                <TableRow className="border-0 bg-emerald-700/95 hover:bg-emerald-700/95 [&>th]:border-r [&>th]:border-emerald-600 [&>th]:last:border-r-0">
+                                    <SortableTableHead column="lot_number" label="LOT NUMBER" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[92px]" isText />
+                                    <SortableTableHead column="sale_order" label="SALE ORDER" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[92px]" />
+                                    <SortableTableHead column="title" label="TITLE" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[280px]" isText />
+                                    <SortableTableHead column="retail_price" label="RETAIL PRICE" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[110px] text-right" />
                                     <SortableTableHead
                                         column="source"
-                                        label="Source"
+                                        label="SOURCE"
                                         sortConfig={sortConfig}
                                         onSort={handleSort}
-                                        className="w-[120px]"
+                                        className="!text-white p-0 min-w-[145px]"
                                         isText
-                                        extraItems={pricingVendors.map(v => ({
-                                            label: v,
-                                            onClick: () => handleSort('source', sortConfig?.direction || 'asc', v),
-                                            isActive: sortConfig?.column === 'source' && sortConfig?.pinnedValue === v
-                                        }))}
+                                        extraItems={[
+                                            ...pricingVendors.map(v => ({
+                                                label: v,
+                                                onClick: () => handleSort('source', sortConfig?.direction || 'asc', v),
+                                                isActive: sortConfig?.column === 'source' && sortConfig?.pinnedValue === v
+                                            })),
+                                            {
+                                                label: 'Unspecified',
+                                                onClick: () => handleSort('source', sortConfig?.direction || 'asc', 'Unknown'),
+                                                isActive: sortConfig?.column === 'source' && sortConfig?.pinnedValue === 'Unknown'
+                                            }
+                                        ]}
                                     />
-                                    <SortableTableHead column="retail_price" label="Retail" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
-                                    <SortableTableHead column="cost_pct" label="Cost %" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
-                                    <SortableTableHead column="cost_price" label="Cost Price" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
-                                    <SortableTableHead column="min_pr_10" label="Min Pr (+10%)" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
-                                    <SortableTableHead column="min_price" label="Min Price" sortConfig={sortConfig} onSort={handleSort} className="text-right" />
+                                    <SortableTableHead column="condition" label="CONDITION" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[145px]" isText />
+                                    <SortableTableHead column="cost_pct" label="COST" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[95px] text-right" />
+                                    <SortableTableHead column="min_price_pct" label="MIN PRICE %" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[95px] text-right" />
+                                    <SortableTableHead column="cost_price" label="COST PRICE" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[110px] text-right" />
+                                    <SortableTableHead column="min_price_half" label="MIN PR (+0,5)" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[120px] text-right" />
+                                    <SortableTableHead column="min_price_one" label="MIN PR (+1)" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[115px] text-right" />
+                                    <SortableTableHead column="repeat" label="ПОВТОР" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[95px] text-right" />
+                                    {historyHeaders.map((header) => (
+                                        <SortableTableHead
+                                            key={header}
+                                            column={header}
+                                            label={header}
+                                            sortConfig={sortConfig}
+                                            onSort={handleSort}
+                                            className="!text-white p-0 min-w-[90px] text-right"
+                                        />
+                                    ))}
                                     {auction.status === 'Completed' && (
-                                        <SortableTableHead column="buybacker" label="Buy-backer" sortConfig={sortConfig} onSort={handleSort} className="w-[130px]" isText />
+                                        <SortableTableHead column="buybacker" label="BUY-BACKER" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[135px]" isText />
                                     )}
-                                    <SortableTableHead column="current_status" label="Status" sortConfig={sortConfig} onSort={handleSort} isText />
-                                    <TableHead className="w-[60px]"></TableHead>
+                                    <SortableTableHead column="current_status" label="STATUS" sortConfig={sortConfig} onSort={handleSort} className="!text-white p-0 min-w-[115px]" isText />
+                                    <TableHead className="h-9 min-w-[68px] p-0 !text-white"></TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {sortedItems.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
+                                {sortedRows.length === 0 ? (
+                                    <TableRow className="border-0">
+                                        <TableCell colSpan={tableColumnCount} className="h-24 text-center text-muted-foreground">
                                             No items found
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    sortedItems.map((item) => (
-                                        <TableRow key={item.id} className="group">
-                                            <TableCell className="font-medium font-mono text-xs">{item.lot_number || '-'}</TableCell>
-                                            <TableCell className="max-w-[250px]">
-                                                <div className="truncate text-sm font-medium">{item.raw_title}</div>
-                                                <div className="text-[10px] text-muted-foreground truncate">{item.vendor_code || ''}</div>
-                                            </TableCell>
-                                            {/* Inline Condition Dropdown */}
-                                            <TableCell>
-                                                <InlineSelect
-                                                    value={item.condition || ''}
-                                                    options={conditionOptions}
-                                                    onChange={(val) => handleConditionChange(item.id, val)}
-                                                    placeholder="— Set —"
-                                                />
-                                            </TableCell>
-                                            {/* Inline Source Dropdown */}
-                                            <TableCell>
-                                                <div className="flex items-center gap-1">
-                                                    {(!item.source || item.source === 'Unknown') && (
-                                                        <span title="Supplier not specified" className="flex shrink-0">
-                                                            <AlertCircle className="h-4 w-4 text-red-500" />
-                                                        </span>
-                                                    )}
+                                    sortedRows.map((rowData) => {
+                                        const item = rowData.item;
+                                        return (
+                                            <TableRow key={item.id} className="group border-0 odd:bg-white even:bg-emerald-50/20 hover:bg-emerald-50/60 [&>td]:border-r [&>td]:border-b [&>td]:border-emerald-100 [&>td]:last:border-r-0">
+                                                <TableCell className="px-2 py-1.5 font-medium font-mono">{rowData.lotNumber || '-'}</TableCell>
+                                                <TableCell className="px-2 py-1.5 text-center font-mono">{rowData.saleOrder === '' ? '-' : rowData.saleOrder}</TableCell>
+                                                <TableCell className="px-2 py-1.5 max-w-[280px]">
+                                                    <div className="truncate text-sm font-medium">{rowData.title}</div>
+                                                    <div className="text-[10px] text-muted-foreground truncate">{item.vendor_code || ''}</div>
+                                                </TableCell>
+                                                <TableCell className="px-2 py-1.5 text-right font-mono">{formatNumber(rowData.retailPrice)}</TableCell>
+                                                <TableCell className="px-2 py-1.5">
+                                                    <div className="flex items-center gap-1">
+                                                        {(!item.source || item.source === 'Unknown') && (
+                                                            <span title="Supplier not specified" className="flex shrink-0">
+                                                                <AlertCircle className="h-4 w-4 text-red-500" />
+                                                            </span>
+                                                        )}
+                                                        <InlineSelect
+                                                            className={(!item.source || item.source === 'Unknown') ? 'text-red-500 font-medium' : ''}
+                                                            value={item.source || ''}
+                                                            options={sourceOptions}
+                                                            onChange={(val) => handleSourceChange(item.id, val)}
+                                                            placeholder="Set"
+                                                        />
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="px-2 py-1.5">
                                                     <InlineSelect
-                                                        className={(!item.source || item.source === 'Unknown') ? 'text-red-500 font-medium' : ''}
-                                                        value={item.source || ''}
-                                                        options={sourceOptions}
-                                                        onChange={(val) => handleSourceChange(item.id, val)}
-                                                        placeholder="— Set —"
-                                                    />
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="text-right font-medium">{formatCurrencyWhole(item.retail_price || 0)}</TableCell>
-                                            <TableCell className="text-right text-muted-foreground text-xs">
-                                                {item.retail_price ? Math.round(((item.cost_price || 0) / item.retail_price) * 100) + '%' : '0%'}
-                                            </TableCell>
-                                            <TableCell className="text-right">{formatCurrencyWhole(item.cost_price || 0)}</TableCell>
-                                            <TableCell className="text-right text-muted-foreground text-xs">
-                                                {formatCurrencyWhole(Math.round((item.retail_price || 0) * 0.10))}
-                                            </TableCell>
-                                            <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400">
-                                                {formatCurrencyWhole(Math.ceil(item.min_price || 0))}
-                                            </TableCell>
-                                            {/* Inline Buy-backer Dropdown */}
-                                            {auction.status === 'Completed' && (
-                                                <TableCell>
-                                                    <InlineSelect
-                                                        value={item.buybacker_id || ''}
-                                                        options={buybackerOptions}
-                                                        onChange={(val) => handleBuybackerChange(item.id, val)}
-                                                        placeholder="—"
+                                                        value={item.condition || ''}
+                                                        options={conditionOptions}
+                                                        onChange={(val) => handleConditionChange(item.id, val)}
+                                                        placeholder="Set"
                                                     />
                                                 </TableCell>
-                                            )}
-                                            <TableCell>
-                                                <Badge variant="secondary" className={getStatusColor(item.current_status)}>
-                                                    {item.current_status}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <Button
-                                                        variant="ghost" size="icon" className="h-7 w-7 text-indigo-500"
-                                                        title="View bid history"
-                                                        onClick={() => handleShowHistory(item.normalized_title)}
-                                                    >
-                                                        <History className="h-3.5 w-3.5" />
-                                                    </Button>
-                                                    {auction.status !== 'Completed' && (
+                                                <TableCell className="px-2 py-1.5 text-right font-mono text-emerald-700">{Math.round(rowData.costPct * 100)}%</TableCell>
+                                                <TableCell className="px-2 py-1.5 text-right font-mono text-amber-700">{Math.round(rowData.minPricePct * 100)}%</TableCell>
+                                                <TableCell className="px-2 py-1.5 text-right font-mono">{formatNumber(Math.round(rowData.costPrice))}</TableCell>
+                                                <TableCell className="px-2 py-1.5 text-right font-mono">{formatNumber(Math.round(rowData.minPriceHalf))}</TableCell>
+                                                <TableCell className="px-2 py-1.5 text-right font-mono font-semibold text-emerald-700">{formatNumber(Math.round(rowData.minPriceOne))}</TableCell>
+                                                <TableCell className="px-2 py-1.5 text-right font-mono font-semibold text-indigo-700">
+                                                    {formatNumber(Math.round(rowData.repeat))}
+                                                </TableCell>
+                                                {historyHeaders.map((header) => (
+                                                    <TableCell key={`${item.id}-${header}`} className="px-2 py-1.5 text-right font-mono">
+                                                        {formatNumber(Math.round(rowData.historyBySeason[header] ?? 0))}
+                                                    </TableCell>
+                                                ))}
+                                                {auction.status === 'Completed' && (
+                                                    <TableCell className="px-2 py-1.5">
+                                                        <InlineSelect
+                                                            value={item.buybacker_id || ''}
+                                                            options={buybackerOptions}
+                                                            onChange={(val) => handleBuybackerChange(item.id, val)}
+                                                            placeholder="--"
+                                                        />
+                                                    </TableCell>
+                                                )}
+                                                <TableCell className="px-2 py-1.5">
+                                                    <Badge variant="secondary" className={getStatusColor(item.current_status)}>
+                                                        {item.current_status}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell className="px-1 py-1.5">
+                                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity justify-center">
                                                         <Button
-                                                            variant="ghost" size="icon"
-                                                            className="h-7 w-7 text-muted-foreground hover:text-red-500"
-                                                            onClick={async () => {
-                                                                try {
-                                                                    await api.unassignItem(item.id);
-                                                                    toast.success('Item removed from auction');
-                                                                    if (auction) await loadAuctionData(auction.id);
-                                                                } catch { toast.error('Failed to remove item'); }
-                                                            }}
+                                                            variant="ghost" size="icon" className="h-7 w-7 text-indigo-500"
+                                                            title="View bid history"
+                                                            onClick={() => handleShowHistory(item.normalized_title)}
                                                         >
-                                                            <X className="h-3.5 w-3.5" />
+                                                            <History className="h-3.5 w-3.5" />
                                                         </Button>
-                                                    )}
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
+                                                        {auction.status !== 'Completed' && (
+                                                            <Button
+                                                                variant="ghost" size="icon"
+                                                                className="h-7 w-7 text-muted-foreground hover:text-red-500"
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        await api.unassignItem(item.id);
+                                                                        toast.success('Item removed from auction');
+                                                                        if (auction) await loadAuctionData(auction.id);
+                                                                    } catch { toast.error('Failed to remove item'); }
+                                                                }}
+                                                            >
+                                                                <X className="h-3.5 w-3.5" />
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })
                                 )}
                             </TableBody>
                         </Table>
                     </div>
                     <div className="mt-4 text-xs text-muted-foreground text-center">
-                        Showing {sortedItems.length} of {auctionItems.length} items
+                        Showing {sortedRows.length} of {auctionItems.length} items
                     </div>
                 </CardContent>
             </Card>
         </div>
     );
 }
+

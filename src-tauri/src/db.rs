@@ -372,6 +372,161 @@ impl Database {
         // Migration: Add sale_order and buybacker_id columns to inventory_items
         let _ = self.conn.execute("ALTER TABLE inventory_items ADD COLUMN sale_order INTEGER", []);
         let _ = self.conn.execute("ALTER TABLE inventory_items ADD COLUMN buybacker_id TEXT", []);
+        // Migration: keep per-attempt snapshot data for reliable repeater analytics
+        let _ = self.conn.execute("ALTER TABLE auction_results ADD COLUMN item_status TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE auction_results ADD COLUMN min_price_snapshot REAL", []);
+        let _ = self.conn.execute(
+            "UPDATE auction_results
+             SET item_status = CASE
+                 WHEN is_buyback = 1 THEN 'Buyback'
+                 WHEN COALESCE(high_bid, 0) <= 0 OR trim(COALESCE(winning_bidder, '')) = '' THEN 'Unsold'
+                 ELSE 'Sold'
+             END
+             WHERE item_status IS NULL",
+            [],
+        );
+        let _ = self.conn.execute(
+            "UPDATE auction_results
+             SET min_price_snapshot = (
+                 SELECT i.min_price
+                 FROM inventory_items i
+                 WHERE i.id = auction_results.item_id
+             )
+             WHERE min_price_snapshot IS NULL",
+            [],
+        );
+        // Migration: keep historical_sales focused on true sold attempts only
+        let _ = self.conn.execute_batch(
+            "
+            DROP TRIGGER IF EXISTS after_auction_result_insert;
+            CREATE TRIGGER IF NOT EXISTS after_auction_result_insert
+            AFTER INSERT ON auction_results
+            FOR EACH ROW
+            WHEN NEW.is_buyback = FALSE AND COALESCE(NEW.item_status, 'Sold') = 'Sold'
+            BEGIN
+                INSERT OR IGNORE INTO historical_sales (
+                    id, normalized_title, extracted_brand, extracted_sku,
+                    category, condition, retail_price, cost_price,
+                    sale_price, sale_date, platform, season
+                )
+                SELECT
+                    NEW.id,
+                    i.normalized_title,
+                    i.extracted_brand,
+                    i.sku_extracted,
+                    i.category,
+                    i.condition,
+                    i.retail_price,
+                    i.cost_price,
+                    NEW.high_bid,
+                    DATE('now'),
+                    'HiBid',
+                    CASE
+                        WHEN CAST(strftime('%m', 'now') AS INTEGER) BETWEEN 1 AND 3 THEN 'Q1'
+                        WHEN CAST(strftime('%m', 'now') AS INTEGER) BETWEEN 4 AND 6 THEN 'Q2'
+                        WHEN CAST(strftime('%m', 'now') AS INTEGER) BETWEEN 7 AND 9 THEN 'Q3'
+                        ELSE 'Q4'
+                    END
+                FROM inventory_items i
+                WHERE i.id = NEW.item_id;
+            END;
+            ",
+        );
+        // Migration: refresh v_auction_pnl to use persisted auction_results item_status
+        let _ = self.conn.execute_batch(
+            "
+            DROP VIEW IF EXISTS v_auction_pnl;
+            CREATE VIEW IF NOT EXISTS v_auction_pnl AS
+            SELECT
+                a.id as auction_id,
+                a.name as auction_name,
+                a.start_date,
+                a.end_date,
+                COUNT(DISTINCT i.id) as total_items,
+                SUM(
+                    CASE
+                        WHEN COALESCE(
+                            ar.item_status,
+                            CASE
+                                WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                                WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                                ELSE 'Unsold'
+                            END
+                        ) = 'Sold' THEN 1
+                        ELSE 0
+                    END
+                ) as sold_items,
+                SUM(
+                    CASE
+                        WHEN COALESCE(
+                            ar.item_status,
+                            CASE
+                                WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                                WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                                ELSE 'Unsold'
+                            END
+                        ) = 'Buyback' THEN 1
+                        ELSE 0
+                    END
+                ) as buyback_items,
+                SUM(
+                    CASE
+                        WHEN COALESCE(
+                            ar.item_status,
+                            CASE
+                                WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                                WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                                ELSE 'Unsold'
+                            END
+                        ) = 'Sold' THEN ar.high_bid
+                        ELSE 0
+                    END
+                ) as total_revenue,
+                SUM(
+                    CASE
+                        WHEN COALESCE(
+                            ar.item_status,
+                            CASE
+                                WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                                WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                                ELSE 'Unsold'
+                            END
+                        ) = 'Sold' THEN i.cost_price
+                        ELSE 0
+                    END
+                ) as total_cost,
+                SUM(
+                    CASE
+                        WHEN COALESCE(
+                            ar.item_status,
+                            CASE
+                                WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                                WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                                ELSE 'Unsold'
+                            END
+                        ) = 'Sold' THEN ar.commission_amount
+                        ELSE 0
+                    END
+                ) as total_commission,
+                SUM(
+                    CASE
+                        WHEN COALESCE(
+                            ar.item_status,
+                            CASE
+                                WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                                WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                                ELSE 'Unsold'
+                            END
+                        ) = 'Sold' THEN ar.net_profit
+                        ELSE 0
+                    END
+                ) as net_profit
+            FROM auctions a
+            LEFT JOIN inventory_items i ON i.auction_id = a.id
+            LEFT JOIN auction_results ar ON ar.auction_id = a.id AND ar.item_id = i.id
+            GROUP BY a.id;
+            ",
+        );
 
         // ============================================================
         // New tables for ТЗ: condition_types, source_types, pricing_rules, buybackers

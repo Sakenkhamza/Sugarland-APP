@@ -4,7 +4,7 @@ use rust_xlsxwriter::{Format, Workbook, FormatAlign, FormatBorder, Color};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Auction {
@@ -76,9 +76,41 @@ struct ReportItem {
 
 pub struct AuctionManager;
 
+fn extract_auction_number(raw: &str) -> Option<u32> {
+    let mut groups: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for ch in raw.chars() {
+        if ch.is_ascii_digit() {
+            current.push(ch);
+        } else if !current.is_empty() {
+            groups.push(current.clone());
+            current.clear();
+        }
+    }
+
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    groups
+        .last()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|n| *n > 0)
+}
+
+fn normalize_auction_name(raw: &str) -> Option<String> {
+    extract_auction_number(raw).map(|n| format!("Sugarland {}", n))
+}
+
 impl AuctionManager {
     pub fn create_auction(db: &Database, req: CreateAuctionRequest) -> Result<String> {
         let id = Uuid::new_v4().to_string();
+        let normalized_name = normalize_auction_name(&req.name).ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName(
+                "Invalid auction number. Expected format: Sugarland <number>".to_string(),
+            )
+        })?;
         
         db.conn.execute(
             "INSERT INTO auctions (id, hibid_auction_id, name, vendor_id, start_date, end_date, status, total_lots)
@@ -86,7 +118,7 @@ impl AuctionManager {
             rusqlite::params![
                 id,
                 req.hibid_auction_id,
-                req.name,
+                normalized_name,
                 req.vendor_id,
                 req.start_date,
                 req.end_date
@@ -242,7 +274,7 @@ impl AuctionManager {
         for item in &db_items {
             let csv_row = csv_by_lot.get(item.lot_number.as_str());
 
-            let (high_bid, buyer, is_sold) = match csv_row {
+            let (high_bid, buyer, has_valid_bidder) = match csv_row {
                 Some(row) => {
                     let bid = csv_parser::clean_price(&row.high_bid);
                     let buyer_name = row.winning_bidder.trim().to_string();
@@ -263,45 +295,59 @@ impl AuctionManager {
                 None => (0.0, String::new(), false),
             };
 
-            let selling_price = high_bid / 100.0;
-            
-            let is_buyback = if is_sold {
+            let below_min_price = has_valid_bidder && high_bid > 0.0 && high_bid < item.min_price;
+            let is_buyback = if has_valid_bidder && !below_min_price {
                 let winner_lower = buyer.to_lowercase();
                 buyback_names.iter().any(|bb_name| winner_lower.contains(bb_name))
             } else {
                 false
             };
-            
-            let profit_loss = if is_sold && !is_buyback { selling_price - item.cost_price } else { 0.0 };
 
             // Determine item status
-            let new_status = if is_buyback {
+            let new_status = if below_min_price {
+                "Unsold"
+            } else if is_buyback {
                 "Buyback"
-            } else if is_sold {
+            } else if has_valid_bidder {
                 "Sold"
             } else {
                 "Unsold"
             };
+            let selling_price = if new_status == "Sold" { high_bid } else { 0.0 };
+            let profit_loss = if new_status == "Sold" {
+                selling_price - item.cost_price
+            } else {
+                0.0
+            };
 
             // Update item status
             db.conn.execute(
-                "UPDATE inventory_items SET current_status = ?1 WHERE id = ?2",
+                "UPDATE inventory_items
+                 SET current_status = ?1,
+                     sold_at = CASE WHEN ?1 = 'Sold' THEN CURRENT_TIMESTAMP ELSE NULL END
+                 WHERE id = ?2",
                 rusqlite::params![new_status, item.id],
             ).map_err(|e| e.to_string())?;
 
             // Insert auction result
             let result_id = Uuid::new_v4().to_string();
             let commission = if new_status == "Sold" { selling_price * 0.15 } else { 0.0 };
-            let net_profit = selling_price - item.cost_price - commission;
+            let net_profit = if new_status == "Sold" {
+                selling_price - item.cost_price - commission
+            } else {
+                0.0
+            };
             db.conn.execute(
                 "INSERT INTO auction_results (id, auction_id, item_id, high_bid, winning_bidder,
-                 commission_amount, net_profit, is_buyback)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 commission_amount, net_profit, is_buyback, item_status, min_price_snapshot)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     result_id, auction_id, item.id,
-                    selling_price, buyer,
+                    high_bid, buyer,
                     commission, net_profit,
-                    is_buyback
+                    is_buyback,
+                    new_status,
+                    item.min_price
                 ],
             ).map_err(|e| e.to_string())?;
 
@@ -836,11 +882,277 @@ pub fn rename_auction(
     state: State<crate::AppState>,
 ) -> std::result::Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
+    let normalized_name = normalize_auction_name(&name)
+        .ok_or_else(|| "Invalid auction number. Use positive number.".to_string())?;
     db.conn.execute(
         "UPDATE auctions SET name = ?1 WHERE id = ?2",
-        rusqlite::params![name, auction_id],
+        rusqlite::params![normalized_name, auction_id],
     ).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_relistable_inventory_items(
+    auction_id: String,
+    state: State<crate::AppState>,
+) -> std::result::Result<Vec<crate::db::InventoryItemRow>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let items = db.get_inventory_items(None).map_err(|e| e.to_string())?;
+    let filtered = items
+        .into_iter()
+        .filter(|item| {
+            matches!(
+                item.current_status.as_str(),
+                "InStock" | "Unsold" | "Buyback" | "FloorSale"
+            ) && item.auction_id.as_deref() != Some(auction_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    Ok(filtered)
+}
+
+#[tauri::command]
+pub fn assign_items_to_auction(
+    auction_id: String,
+    item_ids: Vec<String>,
+    state: State<crate::AppState>,
+) -> std::result::Result<i32, String> {
+    if item_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut db = state.db.lock().map_err(|e| e.to_string())?;
+    let auction_status: String = db
+        .conn
+        .query_row(
+            "SELECT status FROM auctions WHERE id = ?1",
+            rusqlite::params![&auction_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Auction not found: {}", e))?;
+    if auction_status != "Active" {
+        return Err("Items can only be added to an active auction".to_string());
+    }
+
+    let tx = db.conn.transaction().map_err(|e| e.to_string())?;
+    let mut affected_count: i32 = 0;
+    let mut touched_ids: HashSet<String> = HashSet::new();
+    for item_id in item_ids {
+        if !touched_ids.insert(item_id.clone()) {
+            continue;
+        }
+        let affected = tx
+            .execute(
+                "UPDATE inventory_items
+                 SET current_status = 'Listed',
+                     auction_id = ?1,
+                     listed_at = CURRENT_TIMESTAMP,
+                     sold_at = NULL,
+                     sale_order = NULL,
+                     buybacker_id = NULL
+                 WHERE id = ?2
+                   AND current_status IN ('InStock', 'Unsold', 'Buyback', 'FloorSale')",
+                rusqlite::params![&auction_id, &item_id],
+            )
+            .map_err(|e| e.to_string())?;
+        affected_count += affected as i32;
+    }
+
+    tx.execute(
+        "UPDATE auctions
+         SET total_lots = (
+             SELECT COUNT(*)
+             FROM inventory_items
+             WHERE auction_id = ?1
+         )
+         WHERE id = ?1",
+        rusqlite::params![&auction_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+
+    Ok(affected_count)
+}
+
+#[tauri::command]
+pub fn get_item_repeater_stats(
+    normalized_titles: Vec<String>,
+    season_headers: Vec<String>,
+    state: State<crate::AppState>,
+) -> std::result::Result<HashMap<String, HashMap<String, f64>>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut titles = normalized_titles
+        .into_iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>();
+    titles.sort();
+    titles.dedup();
+
+    let mut header_by_number: HashMap<u32, String> = HashMap::new();
+    let mut valid_headers = Vec::new();
+    for header in season_headers {
+        if let Some(number) = extract_auction_number(&header) {
+            header_by_number.insert(number, header.clone());
+            valid_headers.push(header);
+        }
+    }
+
+    let mut result: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    for title in &titles {
+        let mut per_header = HashMap::new();
+        for header in &valid_headers {
+            per_header.insert(header.clone(), 0.0);
+        }
+        result.insert(title.clone(), per_header);
+    }
+
+    if titles.is_empty() || valid_headers.is_empty() {
+        return Ok(result);
+    }
+
+    let placeholders = vec!["?"; titles.len()].join(",");
+    let sql = format!(
+        "SELECT i.normalized_title, a.name, MAX(ar.high_bid) as max_bid
+         FROM auction_results ar
+         JOIN inventory_items i ON i.id = ar.item_id
+         JOIN auctions a ON a.id = ar.auction_id
+         WHERE i.normalized_title IN ({})
+           AND ar.high_bid > 0
+           AND (
+             ar.item_status IN ('Unsold', 'Buyback')
+             OR (
+               ar.item_status IS NULL
+               AND (
+                 ar.is_buyback = 1
+                 OR trim(COALESCE(ar.winning_bidder, '')) = ''
+               )
+             )
+           )
+         GROUP BY i.normalized_title, a.name",
+        placeholders
+    );
+
+    let mut stmt = db.conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(titles.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (title, auction_name, max_bid) = row.map_err(|e| e.to_string())?;
+        let Some(auction_number) = extract_auction_number(&auction_name) else {
+            continue;
+        };
+        let Some(header) = header_by_number.get(&auction_number) else {
+            continue;
+        };
+        let title_entry = result.entry(title).or_insert_with(|| {
+            valid_headers
+                .iter()
+                .map(|h| (h.clone(), 0.0))
+                .collect::<HashMap<String, f64>>()
+        });
+        let current = title_entry.get(header).copied().unwrap_or(0.0);
+        if max_bid > current {
+            title_entry.insert(header.clone(), max_bid);
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn get_item_first_auction_map(
+    item_ids: Vec<String>,
+    state: State<crate::AppState>,
+) -> std::result::Result<HashMap<String, String>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut ids = item_ids
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+
+    let mut result: HashMap<String, String> = HashMap::new();
+    if ids.is_empty() {
+        return Ok(result);
+    }
+
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT ia.item_id, a.name, a.created_at
+         FROM (
+             SELECT DISTINCT ar.item_id AS item_id, ar.auction_id AS auction_id
+             FROM auction_results ar
+             WHERE ar.item_id IN ({placeholders})
+             UNION
+             SELECT i.id AS item_id, i.auction_id AS auction_id
+             FROM inventory_items i
+             WHERE i.id IN ({placeholders})
+               AND i.auction_id IS NOT NULL
+         ) ia
+         JOIN auctions a ON a.id = ia.auction_id"
+    );
+
+    let mut params = Vec::with_capacity(ids.len() * 2);
+    params.extend(ids.iter().cloned());
+    params.extend(ids.iter().cloned());
+
+    let mut stmt = db.conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut earliest_by_item: HashMap<String, (String, String)> = HashMap::new();
+
+    for row in rows {
+        let (item_id, auction_name, created_at) = row.map_err(|e| e.to_string())?;
+        match earliest_by_item.get(&item_id) {
+            Some((known_created_at, known_auction_name)) => {
+                let replace = if created_at < *known_created_at {
+                    true
+                } else if created_at == *known_created_at {
+                    match (
+                        extract_auction_number(&auction_name),
+                        extract_auction_number(known_auction_name),
+                    ) {
+                        (Some(next), Some(current)) => next < current,
+                        (Some(_), None) => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if replace {
+                    earliest_by_item.insert(item_id, (created_at, auction_name));
+                }
+            }
+            None => {
+                earliest_by_item.insert(item_id, (created_at, auction_name));
+            }
+        }
+    }
+
+    for (item_id, (_, auction_name)) in earliest_by_item {
+        result.insert(item_id, auction_name);
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]

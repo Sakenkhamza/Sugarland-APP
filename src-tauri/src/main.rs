@@ -405,6 +405,14 @@ fn delete_source_type(name: String, state: tauri::State<AppState>) -> Result<(),
     ).map_err(|e| e.to_string())?;
     
     tx.execute(
+        "UPDATE inventory_items
+         SET source = 'Unknown'
+         WHERE lower(trim(source)) = lower(trim(?1))
+            OR lower(trim(source)) = lower(trim(?2))",
+        rusqlite::params![name, id],
+    ).map_err(|e| e.to_string())?;
+
+    tx.execute(
         "DELETE FROM vendors WHERE name = ?1 OR id = ?2",
         rusqlite::params![name, id],
     ).map_err(|e| e.to_string())?;
@@ -500,7 +508,8 @@ fn update_pricing_rule(
 fn recalculate_prices(
     auction_id: String,
     vendor_costs: std::collections::HashMap<String, f64>,
-    condition_margins: std::collections::HashMap<String, f64>,
+    condition_margins_by_supplier: Option<std::collections::HashMap<String, std::collections::HashMap<String, f64>>>,
+    condition_margins: Option<std::collections::HashMap<String, f64>>,
     state: tauri::State<AppState>,
 ) -> Result<i32, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -528,7 +537,18 @@ fn recalculate_prices(
         let cost_pct = vendor_costs.get(&item.source).copied().unwrap_or(0.15); // default 15%
         let cost_price = (item.retail * cost_pct * 100.0).round() / 100.0;
 
-        let margin_pct = condition_margins.get(&item.condition).copied().unwrap_or(0.10); // default 10%
+        let margin_pct = condition_margins_by_supplier
+            .as_ref()
+            .and_then(|margins_by_supplier| margins_by_supplier.get(&item.source))
+            .and_then(|supplier_margins| supplier_margins.get(&item.condition))
+            .copied()
+            .or_else(|| {
+                condition_margins
+                    .as_ref()
+                    .and_then(|margins| margins.get(&item.condition))
+                    .copied()
+            })
+            .unwrap_or(0.10); // default 10%
         let new_min_price = (cost_price + (item.retail * margin_pct)).ceil();
 
         db.conn.execute(
@@ -744,9 +764,13 @@ fn main() {
             auctions::update_auction_status,
             auctions::update_vendor,
             auctions::unassign_item,
+            auctions::get_relistable_inventory_items,
+            auctions::assign_items_to_auction,
             auctions::finish_auction,
             auctions::get_auction_reports,
             auctions::get_all_auction_reports,
+            auctions::get_item_repeater_stats,
+            auctions::get_item_first_auction_map,
             auctions::open_report_file,
             auctions::rename_auction,
             auctions::delete_auction,

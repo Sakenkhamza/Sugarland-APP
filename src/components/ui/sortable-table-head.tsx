@@ -46,7 +46,7 @@ export function SortableTableHead({
                             'flex items-center gap-1 w-full h-full px-2 py-2 text-left text-xs font-medium',
                             'hover:bg-muted/50 transition-colors cursor-pointer select-none',
                             'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                            isActive && 'text-foreground'
+                            isActive && 'text-current'
                         )}
                     >
                         <span className="truncate">{label}</span>

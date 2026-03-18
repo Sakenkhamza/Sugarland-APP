@@ -74,6 +74,20 @@ export const api = {
     getInventoryItems: (status?: string) =>
         invokeCommand<InventoryItem[]>('get_inventory_items', { status }),
 
+    getRelistableInventoryItems: (auctionId: string) =>
+        invokeCommand<InventoryItem[]>('get_relistable_inventory_items', {
+            auctionId,
+            auction_id: auctionId,
+        }),
+
+    assignItemsToAuction: (auctionId: string, itemIds: string[]) =>
+        invokeCommand<number>('assign_items_to_auction', {
+            auctionId,
+            itemIds,
+            auction_id: auctionId,
+            item_ids: itemIds,
+        }),
+
     getDashboardStats: () =>
         invokeCommand<DashboardStats>('get_dashboard_stats'),
 
@@ -171,8 +185,18 @@ export const api = {
     updatePricingRule: (conditionCategory: string, level: number, multiplier: number) =>
         invokeCommand<void>('update_pricing_rule', { conditionCategory, level, multiplier }),
 
-    recalculatePrices: (auctionId: string, vendorCosts: Record<string, number>, conditionMargins: Record<string, number>) =>
-        invokeCommand<number>('recalculate_prices', { auctionId, vendorCosts, conditionMargins }),
+    recalculatePrices: (
+        auctionId: string,
+        vendorCosts: Record<string, number>,
+        conditionMarginsBySupplier: Record<string, Record<string, number>>,
+        conditionMargins?: Record<string, number>,
+    ) =>
+        invokeCommand<number>('recalculate_prices', {
+            auctionId,
+            vendorCosts,
+            conditionMarginsBySupplier,
+            conditionMargins,
+        }),
 
     // Buy-backers
     getBuybackers: () =>
@@ -190,6 +214,20 @@ export const api = {
     // Item history (Repeaters)
     getItemHistory: (normalizedTitle: string) =>
         invokeCommand<ItemHistoryEntry[]>('get_item_history', { normalizedTitle }),
+
+    getItemRepeaterStats: (normalizedTitles: string[], seasonHeaders: string[]) =>
+        invokeCommand<Record<string, Record<string, number>>>('get_item_repeater_stats', {
+            normalizedTitles,
+            seasonHeaders,
+            normalized_titles: normalizedTitles,
+            season_headers: seasonHeaders,
+        }),
+
+    getItemFirstAuctionMap: (itemIds: string[]) =>
+        invokeCommand<Record<string, string>>('get_item_first_auction_map', {
+            itemIds,
+            item_ids: itemIds,
+        }),
 
     // Auction management
     renameAuction: (auctionId: string, name: string) =>
@@ -239,6 +277,20 @@ function mockResponse(cmd: string): any {
                 source: 'Best Buy',
                 created_at: new Date().toISOString(),
             }));
+        case 'get_relistable_inventory_items':
+            return Array(10).fill(null).map((_, i) => ({
+                id: `item-${i}`,
+                raw_title: `Mock Item ${i}`,
+                lot_number: `LOT-${1000 + i}`,
+                retail_price: 100.0 + i * 10,
+                cost_price: 10.0 + i,
+                min_price: 50.0 + i * 5,
+                current_status: i % 2 === 0 ? 'Buyback' : 'Unsold',
+                source: 'Best Buy',
+                created_at: new Date().toISOString(),
+            }));
+        case 'assign_items_to_auction':
+            return 3;
         case 'get_auctions':
             return [
                 { id: '1', name: 'Weekly Auction #45', status: 'Active', total_lots: 0, created_at: new Date().toISOString() },
@@ -293,6 +345,10 @@ function mockResponse(cmd: string): any {
             return "0.15";
         case 'validate_csv':
             return { valid: true, message: 'CSV is valid. Checked 5 rows.', warnings: [] };
+        case 'get_item_repeater_stats':
+            return {};
+        case 'get_item_first_auction_map':
+            return {};
         default:
             return null;
     }

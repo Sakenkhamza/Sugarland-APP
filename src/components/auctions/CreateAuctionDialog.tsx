@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import type { ValidationResult } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { buildAuctionNameFromNumber } from '@/lib/auctionNaming';
 
 interface CreateAuctionDialogProps {
     open: boolean;
@@ -13,7 +14,7 @@ interface CreateAuctionDialogProps {
 }
 
 export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuctionDialogProps) {
-    const [auctionName, setAuctionName] = useState('');
+    const [auctionNumber, setAuctionNumber] = useState('');
     const [csvFilePath, setCsvFilePath] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
@@ -22,7 +23,7 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
     useEffect(() => {
         if (open) {
             // Reset state
-            setAuctionName('');
+            setAuctionNumber('');
             setCsvFilePath(null);
             setIsSubmitting(false);
             setValidationResult(null);
@@ -53,7 +54,8 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
     };
 
     const handleCreate = async () => {
-        if (!auctionName.trim()) return;
+        const auctionName = buildAuctionNameFromNumber(auctionNumber);
+        if (!auctionName) return;
 
         try {
             setIsSubmitting(true);
@@ -103,17 +105,21 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
                     </Dialog.Close>
 
                     <div className="space-y-6 py-4 overflow-y-auto flex-1 px-1 pr-2">
-                        {/* Section 1: Auction Name */}
+                        {/* Section 1: Auction Number */}
                         <div className="space-y-2">
                             <label htmlFor="auction-name" className="text-sm font-medium leading-none">
-                                Auction Name <span className="text-red-500">*</span>
+                                Auction Number <span className="text-red-500">*</span>
                             </label>
                             <Input
                                 id="auction-name"
-                                placeholder="Name"
-                                value={auctionName}
-                                onChange={(e) => setAuctionName(e.target.value)}
+                                inputMode="numeric"
+                                placeholder="28"
+                                value={auctionNumber}
+                                onChange={(e) => setAuctionNumber(e.target.value.replace(/\D+/g, ''))}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Auction name: {buildAuctionNameFromNumber(auctionNumber) ?? 'Sugarland —'}
+                            </p>
                         </div>
 
                         {/* Section 2: CSV Upload */}
@@ -166,7 +172,7 @@ export function CreateAuctionDialog({ open, onOpenChange, onSuccess }: CreateAuc
                         </Button>
                         <Button
                             onClick={handleCreate}
-                            disabled={!auctionName.trim() || isSubmitting}
+                            disabled={!buildAuctionNameFromNumber(auctionNumber) || isSubmitting}
                         >
                             {isSubmitting ? (
                                 <>

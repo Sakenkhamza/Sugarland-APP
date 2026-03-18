@@ -25,6 +25,8 @@ import {
     DialogDescription,
 } from '@/components/ui/dialog';
 import { formatDate } from '@/lib/utils';
+import { buildAuctionNameFromNumber, buildManagerReportFileName, extractAuctionNumber } from '@/lib/auctionNaming';
+import { buildManagerReportWorkbook, getHistoryHeadersForAuction } from '@/lib/managerReport';
 import { CreateAuctionDialog } from '@/components/auctions/CreateAuctionDialog';
 import { toast } from 'sonner';
 
@@ -58,7 +60,7 @@ export function AuctionsPage() {
 
     const openEditDialog = (auction: Auction) => {
         setEditTarget(auction);
-        setEditName(auction.name);
+        setEditName(extractAuctionNumber(auction.name) ?? '');
         setDeleteConfirm(false);
     };
 
@@ -70,9 +72,14 @@ export function AuctionsPage() {
 
     const handleRename = async () => {
         if (!editTarget || !editName.trim()) return;
+        const normalizedName = buildAuctionNameFromNumber(editName);
+        if (!normalizedName) {
+            toast.error('Enter a valid auction number');
+            return;
+        }
         setEditSaving(true);
         try {
-            await api.renameAuction(editTarget.id, editName.trim());
+            await api.renameAuction(editTarget.id, normalizedName);
             toast.success('Auction renamed successfully');
             closeEditDialog();
             loadAuctions();
@@ -113,33 +120,27 @@ export function AuctionsPage() {
                 return;
             }
 
-            const formattedData = auctionItems.map((item, idx) => {
-                const r = idx + 2;
-                const retail = Math.round(item.retail_price || 0);
-                const cost_pct = (item.retail_price || 0) > 0 ? Math.round(((item.cost_price || 0) / (item.retail_price || 1)) * 100) : 0;
+            const historyHeaders = getHistoryHeadersForAuction(auction.name);
+            const normalizedTitles = Array.from(
+                new Set(
+                    auctionItems
+                        .map((item) => item.normalized_title?.trim())
+                        .filter((v): v is string => Boolean(v)),
+                ),
+            );
+            const repeaterStatsByTitle = normalizedTitles.length > 0
+                ? await api.getItemRepeaterStats(normalizedTitles, historyHeaders)
+                : {};
 
-                return {
-                    'Auction name': auction.name,
-                    'LotNumber': item.lot_number || '',
-                    'Quantity': 1,
-                    'Title': item.raw_title || '',
-                    'Vendor Code': item.source === 'Best Buy' ? 'ATXSUGAR' : '',
-                    'Retail Price': retail,
-                    'Source': item.source || '',
-                    'cost': (cost_pct / 100),
-                    'cost price': { t: 'n', f: `ROUND(F${r}*H${r}, 2)` },
-                    'Retail price': { t: 'n', f: `F${r}` },
-                    '% min pr (+10%)': { t: 'n', f: `ROUND(F${r}*0.10, 2)` },
-                    'min price': { t: 'n', f: `CEILING(I${r}+K${r}, 1)` }
-                };
+            const workbook = buildManagerReportWorkbook({
+                items: auctionItems,
+                auctionName: auction.name,
+                historyHeaders,
+                repeaterStatsByTitle,
             });
-
-            const worksheet = XLSX.utils.json_to_sheet(formattedData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
             const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
 
-            const defaultName = `${auction.name.replace(/\s+/g, '_')}_Manager_Report.xlsx`;
+            const defaultName = buildManagerReportFileName(auction.name);
             const savePath = await api.saveFile(defaultName);
             if (!savePath) return;
 
@@ -158,6 +159,7 @@ export function AuctionsPage() {
             default: return 'bg-gray-500/15 text-gray-700 dark:text-gray-300';
         }
     };
+    const normalizedEditName = buildAuctionNameFromNumber(editName);
 
     return (
         <div className="space-y-8 animate-fade-in">
@@ -188,19 +190,23 @@ export function AuctionsPage() {
                     <DialogHeader>
                         <DialogTitle>Edit Auction</DialogTitle>
                         <DialogDescription>
-                            Rename the auction or delete it permanently.
+                            Set auction number. Name will be saved as "Sugarland &lt;number&gt;".
                         </DialogDescription>
                     </DialogHeader>
 
                     <div className="space-y-4 py-2">
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Auction Name</label>
+                            <label className="text-sm font-medium">Auction Number</label>
                             <Input
+                                inputMode="numeric"
                                 value={editName}
-                                onChange={(e) => setEditName(e.target.value)}
+                                onChange={(e) => setEditName(e.target.value.replace(/\D+/g, ''))}
                                 onKeyDown={(e) => e.key === 'Enter' && handleRename()}
-                                placeholder="Enter auction name"
+                                placeholder="28"
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Result: {normalizedEditName ?? 'Sugarland —'}
+                            </p>
                         </div>
                     </div>
 
@@ -241,7 +247,7 @@ export function AuctionsPage() {
                                 </Button>
                                 <Button
                                     onClick={handleRename}
-                                    disabled={editSaving || !editName.trim() || editName.trim() === editTarget?.name}
+                                    disabled={editSaving || !normalizedEditName || normalizedEditName === editTarget?.name}
                                 >
                                     Save
                                 </Button>
@@ -357,3 +363,4 @@ export function AuctionsPage() {
         </div>
     );
 }
+

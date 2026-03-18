@@ -73,53 +73,58 @@ impl ReconciliationManager {
         ).unwrap_or(0.15);
 
         for row in results {
+            let high_bid = csv_parser::clean_price(&row.high_bid);
+            let has_valid_bidder = !row.bidder_id.trim().is_empty()
+                && !row.winning_bidder.trim().eq_ignore_ascii_case("floor")
+                && high_bid > 0.0;
+
             // Check if buyback (against buybackers table + legacy setting)
             let winner_lower = row.winning_bidder.to_lowercase();
-            let is_buyback = buyback_names.iter().any(|bb_name| winner_lower.contains(bb_name)) || row.bidder_id == legacy_id;
-            let status = if is_buyback { "Buyback" } else { "Sold" };
-            
-            let high_bid = csv_parser::clean_price(&row.high_bid);
+            let is_buyback_detected = buyback_names.iter().any(|bb_name| winner_lower.contains(bb_name)) || row.bidder_id == legacy_id;
+
+            // Get item ID + pricing data to persist accurate result snapshot
+            let item_data: rusqlite::Result<(String, f64, f64)> = tx.query_row(
+                "SELECT id, cost_price, min_price FROM inventory_items WHERE lot_number = ?1 AND auction_id = ?2 AND current_status = 'Listed'",
+                rusqlite::params![row.lot_number, auction_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            );
+            let (item_id, cost, min_price) = match item_data {
+                Ok(data) => data,
+                Err(_) => {
+                    errors.push(format!("Lot {}: Item not found or not listed in this auction", row.lot_number));
+                    continue;
+                }
+            };
+
+            let below_min_price = has_valid_bidder && high_bid < min_price;
+            let is_buyback = has_valid_bidder && !below_min_price && is_buyback_detected;
+            let status = if below_min_price {
+                "Unsold"
+            } else if is_buyback {
+                "Buyback"
+            } else if has_valid_bidder {
+                "Sold"
+            } else {
+                "Unsold"
+            };
+            let commission = if status == "Sold" { high_bid * commission_rate } else { 0.0 };
+            let net_profit = if status == "Sold" { high_bid - cost - commission } else { 0.0 };
 
             // Update inventory item status
-            let updated = tx.execute(
-                "UPDATE inventory_items 
-                 SET current_status = ?1, sold_at = CURRENT_TIMESTAMP 
-                 WHERE lot_number = ?2 AND auction_id = ?3 AND current_status = 'Listed'",
-                rusqlite::params![status, row.lot_number, auction_id],
+            tx.execute(
+                "UPDATE inventory_items
+                 SET current_status = ?1,
+                     sold_at = CASE WHEN ?1 = 'Sold' THEN CURRENT_TIMESTAMP ELSE NULL END
+                 WHERE id = ?2",
+                rusqlite::params![status, item_id],
             ).map_err(|e| e.to_string())?;
-
-            if updated == 0 {
-                errors.push(format!("Lot {}: Item not found or not listed in this auction", row.lot_number));
-                continue;
-            }
-
-            // Get item ID to insert result
-            let item_id: String = tx.query_row(
-                "SELECT id FROM inventory_items WHERE lot_number = ?1 AND auction_id = ?2",
-                rusqlite::params![row.lot_number, auction_id],
-                |r| r.get(0),
-            ).unwrap_or_default();
-
-            // Calculate basics
-            let cost: f64 = tx.query_row(
-                "SELECT cost_price FROM inventory_items WHERE id = ?1",
-                rusqlite::params![item_id],
-                |r| r.get(0),
-            ).unwrap_or(0.0);
-
-            let commission = if is_buyback { 0.0 } else { high_bid * commission_rate };
-            let net_profit = if is_buyback {
-                0.0 // Buyback is neutral/loss usually, handled separately
-            } else {
-                high_bid - cost - commission
-            };
 
             // Insert auction result
             tx.execute(
                 "INSERT INTO auction_results 
                  (id, auction_id, item_id, winning_bidder, bidder_id, high_bid, max_bid, 
-                  is_buyback, commission_rate, commission_amount, net_profit)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                  is_buyback, commission_rate, commission_amount, net_profit, item_status, min_price_snapshot)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
                     uuid::Uuid::new_v4().to_string(),
                     auction_id,
@@ -131,7 +136,9 @@ impl ReconciliationManager {
                     is_buyback,
                     commission_rate,
                     commission,
-                    net_profit
+                    net_profit,
+                    status,
+                    min_price
                 ],
             ).map_err(|e| e.to_string())?;
 
@@ -171,7 +178,14 @@ impl ReconciliationManager {
                 COALESCE(SUM(net_profit), 0) as net_profit
             FROM auction_results ar
             JOIN inventory_items i ON ar.item_id = i.id
-            WHERE ar.is_buyback = FALSE
+            WHERE COALESCE(
+                ar.item_status,
+                CASE
+                    WHEN ar.is_buyback = TRUE THEN 'Buyback'
+                    WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
+                    ELSE 'Unsold'
+                END
+            ) = 'Sold'
         ";
 
         let (sold_items, revenue, cogs, expenses, net_profit): (i32, f64, f64, f64, f64) = 
