@@ -8,11 +8,14 @@ import type {
     DashboardStats,
     Vendor,
     ProfitLossReport,
+    AuctionSummary,
+    VendorBreakdown,
     AuctionPnlRow,
     ItemStatus,
     ValidationResult,
     FinishAuctionResult,
     AuctionReport,
+    AuctionResultBid,
     ConditionType,
     SourceType,
     PricingRule,
@@ -117,6 +120,33 @@ export const api = {
 
     getPlReport: () =>
         invokeCommand<ProfitLossReport>('get_pl_report'),
+
+    getPLReportFiltered: (period: string, dateFrom?: string, dateTo?: string) =>
+        invokeCommand<ProfitLossReport>('get_pl_report_filtered', {
+            period,
+            dateFrom,
+            dateTo,
+            date_from: dateFrom,
+            date_to: dateTo,
+        }),
+
+    getAuctionSummaries: (period: string, dateFrom?: string, dateTo?: string) =>
+        invokeCommand<AuctionSummary[]>('get_auction_summaries', {
+            period,
+            dateFrom,
+            dateTo,
+            date_from: dateFrom,
+            date_to: dateTo,
+        }),
+
+    getVendorBreakdown: (period: string, dateFrom?: string, dateTo?: string) =>
+        invokeCommand<VendorBreakdown[]>('get_vendor_breakdown', {
+            period,
+            dateFrom,
+            dateTo,
+            date_from: dateFrom,
+            date_to: dateTo,
+        }),
     getSettings: (key: string) =>
         invokeCommand<string | null>('get_setting', { key }),
 
@@ -147,6 +177,9 @@ export const api = {
 
     getAllAuctionReports: () =>
         invokeCommand<AuctionReport[]>('get_all_auction_reports'),
+
+    getAuctionResultBids: (auctionId: string) =>
+        invokeCommand<AuctionResultBid[]>('get_auction_result_bids', { auctionId, auction_id: auctionId }),
 
     openReportFile: (filePath: string) =>
         invokeCommand<void>('open_report_file', { filePath }),
@@ -327,13 +360,96 @@ function mockResponse(cmd: string): any {
                 total_expenses: 5000,
                 net_profit: 35000,
                 margin_percent: 70,
-                sold_items: 500
+                sold_items: 500,
+                total_lots: 620,
+                buyback_count: 40,
+                unsold_count: 80,
+                sell_through_rate: 86.2,
+                avg_sale_price: 100,
+                period_label: 'All time',
             };
+        case 'get_pl_report_filtered':
+            return {
+                total_revenue: 18000,
+                total_cogs: 5600,
+                gross_profit: 12400,
+                total_expenses: 2700,
+                net_profit: 9700,
+                margin_percent: 53.9,
+                sold_items: 132,
+                total_lots: 180,
+                buyback_count: 18,
+                unsold_count: 30,
+                sell_through_rate: 81.5,
+                avg_sale_price: 136.36,
+                period_label: 'Last 30 days',
+            };
+        case 'get_auction_summaries':
+            return [
+                {
+                    auction_id: 'A-120',
+                    auction_name: 'Sugarland 120',
+                    completed_at: new Date().toISOString(),
+                    total_lots: 90,
+                    sold_count: 70,
+                    buyback_count: 8,
+                    unsold_count: 12,
+                    total_revenue: 9600,
+                    total_cogs: 3200,
+                    total_commission: 1440,
+                    net_profit: 4960,
+                    margin_percent: 51.7,
+                },
+                {
+                    auction_id: 'A-119',
+                    auction_name: 'Sugarland 119',
+                    completed_at: new Date(Date.now() - 86400000 * 7).toISOString(),
+                    total_lots: 88,
+                    sold_count: 62,
+                    buyback_count: 10,
+                    unsold_count: 16,
+                    total_revenue: 7800,
+                    total_cogs: 2400,
+                    total_commission: 1170,
+                    net_profit: 4230,
+                    margin_percent: 54.2,
+                },
+            ];
+        case 'get_vendor_breakdown':
+            return [
+                {
+                    source: 'Best Buy',
+                    item_count: 85,
+                    total_retail: 42000,
+                    total_cost: 5880,
+                    cost_pct: 14,
+                    total_revenue: 12600,
+                    revenue_with_commission: 14490,
+                    revenue_pct: 34.5,
+                    profit_loss: 4830,
+                },
+                {
+                    source: 'Wayfair',
+                    item_count: 47,
+                    total_retail: 21000,
+                    total_cost: 1470,
+                    cost_pct: 7,
+                    total_revenue: 5400,
+                    revenue_with_commission: 6210,
+                    revenue_pct: 29.6,
+                    profit_loss: 3120,
+                },
+            ];
         case 'get_auction_pnl_list':
             return [
                 { auction_id: '1', auction_name: 'Weekly #43', sold_items: 80, buyback_items: 10, total_revenue: 12000, total_cost: 4000, total_commission: 1800, net_profit: 6200, total_items: 100 },
                 { auction_id: '2', auction_name: 'Electronics #12', sold_items: 45, buyback_items: 5, total_revenue: 8500, total_cost: 2800, total_commission: 1275, net_profit: 4425, total_items: 60 },
                 { auction_id: '3', auction_name: 'Furniture Lot', sold_items: 30, buyback_items: 8, total_revenue: 5200, total_cost: 1500, total_commission: 780, net_profit: 2920, total_items: 45 },
+            ];
+        case 'get_auction_result_bids':
+            return [
+                { item_id: 'item-0', high_bid: 120.5 },
+                { item_id: 'item-1', high_bid: 87.0 },
             ];
         case 'export_inventory_csv':
             return 10;

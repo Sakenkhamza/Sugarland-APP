@@ -769,6 +769,7 @@ fn main() {
             auctions::finish_auction,
             auctions::get_auction_reports,
             auctions::get_all_auction_reports,
+            auctions::get_auction_result_bids,
             auctions::get_item_repeater_stats,
             auctions::get_item_first_auction_map,
             auctions::open_report_file,
@@ -777,6 +778,9 @@ fn main() {
             // Reconciliation
             reconciliation::reconcile_auction,
             reconciliation::get_pl_report,
+            reconciliation::get_pl_report_filtered,
+            reconciliation::get_auction_summaries,
+            reconciliation::get_vendor_breakdown,
             // CSV Validation
             csv_parser::validate_csv,
             wipe_database,

@@ -658,6 +658,93 @@ impl Database {
             ",
         )?;
 
+        // One-time migration: legacy HiBid imports stored cents instead of dollars.
+        // Apply only once and persist a migration flag in settings.
+        let hibid_cents_fix_applied: bool = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'hibid_cents_fix_applied'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map(|value| value == "1")
+            .unwrap_or(false);
+
+        if !hibid_cents_fix_applied {
+            log::info!("Running migration: normalize legacy HiBid cents values to dollars");
+            let _ = self.conn.execute(
+                "UPDATE auction_results
+                 SET high_bid = high_bid / 100.0
+                 WHERE high_bid >= 1000",
+                [],
+            );
+            let _ = self.conn.execute(
+                "UPDATE auction_results
+                 SET max_bid = max_bid / 100.0
+                 WHERE max_bid IS NOT NULL
+                   AND max_bid >= 1000",
+                [],
+            );
+            let _ = self.conn.execute(
+                "UPDATE auction_results
+                 SET commission_amount = CASE
+                   WHEN COALESCE(
+                     item_status,
+                     CASE
+                       WHEN is_buyback = 1 THEN 'Buyback'
+                       WHEN COALESCE(high_bid, 0) > 0 THEN 'Sold'
+                       ELSE 'Unsold'
+                     END
+                   ) = 'Sold'
+                     THEN ROUND(COALESCE(high_bid, 0) * COALESCE(commission_rate, 0.15), 4)
+                   ELSE 0
+                 END",
+                [],
+            );
+            let _ = self.conn.execute(
+                "UPDATE auction_results
+                 SET net_profit = CASE
+                   WHEN COALESCE(
+                     item_status,
+                     CASE
+                       WHEN is_buyback = 1 THEN 'Buyback'
+                       WHEN COALESCE(high_bid, 0) > 0 THEN 'Sold'
+                       ELSE 'Unsold'
+                     END
+                   ) = 'Sold'
+                     THEN ROUND(
+                       COALESCE(high_bid, 0)
+                       - COALESCE(
+                         (SELECT i.cost_price FROM inventory_items i WHERE i.id = auction_results.item_id),
+                         0
+                       )
+                       - (COALESCE(high_bid, 0) * COALESCE(commission_rate, 0.15)),
+                       4
+                     )
+                   ELSE 0
+                 END",
+                [],
+            );
+            let _ = self.conn.execute(
+                "UPDATE historical_sales
+                 SET sale_price = COALESCE(
+                   (SELECT ar.high_bid FROM auction_results ar WHERE ar.id = historical_sales.id),
+                   sale_price
+                 )
+                 WHERE platform = 'HiBid'",
+                [],
+            );
+            let _ = self.conn.execute(
+                "INSERT INTO settings (key, value, description, category)
+                 VALUES ('hibid_cents_fix_applied', '1', 'One-time migration for HiBid cents-to-dollars fix', 'system')
+                 ON CONFLICT(key) DO UPDATE SET
+                   value = excluded.value,
+                   description = excluded.description,
+                   category = excluded.category",
+                [],
+            );
+        }
+
         Ok(())
     }
 

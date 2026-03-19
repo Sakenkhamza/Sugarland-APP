@@ -1,6 +1,6 @@
 [package]
 name = "sugarland"
-version = "0.1.21"
+version = "0.1.22"
 description = "Sugarland — Liquidation Management Platform"
 authors = ["Sugarland Team"]
 edition = "2021"

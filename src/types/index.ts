@@ -103,6 +103,11 @@ export interface AuctionResult {
     created_at: string;
 }
 
+export interface AuctionResultBid {
+    item_id: string;
+    high_bid: number;
+}
+
 export interface AuctionPnlRow {
     auction_id: string;
     auction_name: string;
@@ -230,6 +235,39 @@ export interface ProfitLossReport {
     net_profit: number;
     margin_percent: number;
     sold_items: number;
+    total_lots: number;
+    buyback_count: number;
+    unsold_count: number;
+    sell_through_rate: number;
+    avg_sale_price: number;
+    period_label: string;
+}
+
+export interface AuctionSummary {
+    auction_id: string;
+    auction_name: string;
+    completed_at: string;
+    total_lots: number;
+    sold_count: number;
+    buyback_count: number;
+    unsold_count: number;
+    total_revenue: number;
+    total_cogs: number;
+    total_commission: number;
+    net_profit: number;
+    margin_percent: number;
+}
+
+export interface VendorBreakdown {
+    source: string;
+    item_count: number;
+    total_retail: number;
+    total_cost: number;
+    cost_pct: number;
+    total_revenue: number;
+    revenue_with_commission: number;
+    revenue_pct: number;
+    profit_loss: number;
 }
 
 // --- Filters ---

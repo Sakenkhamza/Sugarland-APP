@@ -64,6 +64,11 @@ pub fn clean_price(price_str: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Parse HiBid money fields that are stored as cents and convert to dollars.
+pub fn clean_hibid_cents_price(price_str: &str) -> f64 {
+    clean_price(price_str) / 100.0
+}
+
 /// Normalize a source string to a canonical vendor name
 pub fn normalize_source(source: &Option<String>) -> String {
     match source {
@@ -293,6 +298,8 @@ mod tests {
         assert_eq!(clean_price("$0.99"), 0.99);
         assert_eq!(clean_price(""), 0.0);
         assert_eq!(clean_price("invalid"), 0.0);
+        assert_eq!(clean_hibid_cents_price("500"), 5.0);
+        assert_eq!(clean_hibid_cents_price("30500"), 305.0);
     }
 
     #[test]
