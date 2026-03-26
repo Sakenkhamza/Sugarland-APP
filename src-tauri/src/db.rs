@@ -289,7 +289,7 @@ impl Database {
                 SUM(CASE WHEN ar.is_buyback = FALSE THEN ar.high_bid ELSE 0 END) as total_revenue,
                 SUM(CASE WHEN ar.is_buyback = FALSE THEN i.cost_price ELSE 0 END) as total_cost,
                 SUM(CASE WHEN ar.is_buyback = FALSE THEN ar.commission_amount ELSE 0 END) as total_commission,
-                SUM(CASE WHEN ar.is_buyback = FALSE THEN ar.net_profit ELSE 0 END) as net_profit
+                SUM(CASE WHEN ar.is_buyback = FALSE THEN COALESCE(ar.high_bid, 0) - COALESCE(i.cost_price, 0) ELSE 0 END) as net_profit
             FROM auctions a
             LEFT JOIN inventory_items i ON i.auction_id = a.id
             LEFT JOIN auction_results ar ON ar.auction_id = a.id AND ar.item_id = i.id
@@ -318,7 +318,9 @@ impl Database {
         )?;
 
         // Simple migration: Add vendor_id to auctions if it doesn't exist
-        let _ = self.conn.execute("ALTER TABLE auctions ADD COLUMN vendor_id TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE auctions ADD COLUMN vendor_id TEXT", []);
 
         // Migration: convert Draft/Cancelled auctions to Active
         let _ = self.conn.execute(
@@ -328,26 +330,32 @@ impl Database {
 
         // Migration: Add 'Unsold' and 'FloorSale' to inventory_items current_status CHECK constraint
         // Use PRAGMA writable_schema to directly patch the constraint (avoids trigger/view issues)
-        let has_floorsale: bool = self.conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_items'",
-            [],
-            |row| {
-                let sql: String = row.get(0)?;
-                Ok(sql.contains("FloorSale"))
-            },
-        ).unwrap_or(true);
-
-        if !has_floorsale {
-            log::info!("Running migration: adding 'Unsold'/'FloorSale' to inventory_items CHECK constraint");
-            // First ensure Unsold is present
-            let has_unsold: bool = self.conn.query_row(
+        let has_floorsale: bool = self
+            .conn
+            .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_items'",
                 [],
                 |row| {
                     let sql: String = row.get(0)?;
-                    Ok(sql.contains("Unsold"))
+                    Ok(sql.contains("FloorSale"))
                 },
-            ).unwrap_or(true);
+            )
+            .unwrap_or(true);
+
+        if !has_floorsale {
+            log::info!("Running migration: adding 'Unsold'/'FloorSale' to inventory_items CHECK constraint");
+            // First ensure Unsold is present
+            let has_unsold: bool = self
+                .conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_items'",
+                    [],
+                    |row| {
+                        let sql: String = row.get(0)?;
+                        Ok(sql.contains("Unsold"))
+                    },
+                )
+                .unwrap_or(true);
 
             if !has_unsold {
                 let _ = self.conn.execute_batch("
@@ -370,11 +378,23 @@ impl Database {
         }
 
         // Migration: Add sale_order and buybacker_id columns to inventory_items
-        let _ = self.conn.execute("ALTER TABLE inventory_items ADD COLUMN sale_order INTEGER", []);
-        let _ = self.conn.execute("ALTER TABLE inventory_items ADD COLUMN buybacker_id TEXT", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE inventory_items ADD COLUMN sale_order INTEGER",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE inventory_items ADD COLUMN buybacker_id TEXT",
+            [],
+        );
         // Migration: keep per-attempt snapshot data for reliable repeater analytics
-        let _ = self.conn.execute("ALTER TABLE auction_results ADD COLUMN item_status TEXT", []);
-        let _ = self.conn.execute("ALTER TABLE auction_results ADD COLUMN min_price_snapshot REAL", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE auction_results ADD COLUMN item_status TEXT",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE auction_results ADD COLUMN min_price_snapshot REAL",
+            [],
+        );
         let _ = self.conn.execute(
             "UPDATE auction_results
              SET item_status = CASE
@@ -517,7 +537,7 @@ impl Database {
                                 WHEN COALESCE(ar.high_bid, 0) > 0 THEN 'Sold'
                                 ELSE 'Unsold'
                             END
-                        ) = 'Sold' THEN ar.net_profit
+                        ) = 'Sold' THEN COALESCE(ar.high_bid, 0) - COALESCE(i.cost_price, 0)
                         ELSE 0
                     END
                 ) as net_profit
@@ -569,7 +589,8 @@ impl Database {
         ")?;
 
         // Seed condition types
-        self.conn.execute_batch("
+        self.conn.execute_batch(
+            "
             INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
                 ('new_canceled', 'New - Canceled delivery', 'New');
             INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
@@ -594,10 +615,12 @@ impl Database {
                 ('used_very_good', 'Used - Very good', 'Used');
             INSERT OR IGNORE INTO condition_types (id, label, category) VALUES
                 ('broken', 'Broken', 'Broken');
-        ")?;
+        ",
+        )?;
 
         // Seed source types
-        self.conn.execute_batch("
+        self.conn.execute_batch(
+            "
             INSERT OR IGNORE INTO source_types (id, name) VALUES ('amazon', 'Amazon Bstock');
             INSERT OR IGNORE INTO source_types (id, name) VALUES ('bestbuy', 'Best Buy');
             INSERT OR IGNORE INTO source_types (id, name) VALUES ('wayfair', 'Wayfair');
@@ -608,7 +631,8 @@ impl Database {
             INSERT OR IGNORE INTO source_types (id, name) VALUES ('lowes', 'Lowes');
             INSERT OR IGNORE INTO source_types (id, name) VALUES ('walmart', 'Walmart');
             INSERT OR IGNORE INTO source_types (id, name) VALUES ('unknown', 'Unknown');
-        ")?;
+        ",
+        )?;
 
         // Seed pricing rules matrix
         // New: L1=Cost(1.0), L2=Cost+5%(1.05), L3=Cost+10%(1.10)
@@ -712,17 +736,16 @@ impl Database {
                        ELSE 'Unsold'
                      END
                    ) = 'Sold'
-                     THEN ROUND(
-                       COALESCE(high_bid, 0)
-                       - COALESCE(
-                         (SELECT i.cost_price FROM inventory_items i WHERE i.id = auction_results.item_id),
-                         0
-                       )
-                       - (COALESCE(high_bid, 0) * COALESCE(commission_rate, 0.15)),
-                       4
-                     )
-                   ELSE 0
-                 END",
+                      THEN ROUND(
+                        COALESCE(high_bid, 0)
+                        - COALESCE(
+                          (SELECT i.cost_price FROM inventory_items i WHERE i.id = auction_results.item_id),
+                          0
+                        ),
+                        4
+                      )
+                    ELSE 0
+                  END",
                 [],
             );
             let _ = self.conn.execute(
@@ -821,9 +844,9 @@ impl Database {
     }
 
     pub fn get_dashboard_stats(&self) -> Result<DashboardStats> {
-        let total_items: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM inventory_items", [], |r| r.get(0))?;
+        let total_items: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM inventory_items", [], |r| r.get(0))?;
 
         let in_stock: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM inventory_items WHERE current_status = 'InStock'",

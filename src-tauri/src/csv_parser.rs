@@ -93,7 +93,7 @@ pub fn normalize_source(source: &Option<String>) -> String {
 /// Extract condition from description string, then normalize it
 pub fn extract_and_normalize_condition(description: &Option<String>) -> String {
     let mut raw_condition = String::new();
-    
+
     if let Some(desc) = description {
         let marker = "Condition: ";
         if let Some(idx) = desc.find(marker) {
@@ -141,7 +141,10 @@ pub fn normalize_condition(condition: &Option<String>) -> String {
                 "Used - Very good".to_string()
             } else if lower.contains("good") {
                 "Used - Good".to_string()
-            } else if lower.contains("broken") || lower.contains("scrap") || lower.contains("salvage") {
+            } else if lower.contains("broken")
+                || lower.contains("scrap")
+                || lower.contains("salvage")
+            {
                 "Broken".to_string()
             } else {
                 "New - Open box".to_string() // safe default that matches a UI option
@@ -305,20 +308,41 @@ mod tests {
     #[test]
     fn test_normalize_source() {
         assert_eq!(normalize_source(&Some("Best Buy".to_string())), "Best Buy");
-        assert_eq!(normalize_source(&Some("best buy wholesale".to_string())), "Best Buy");
+        assert_eq!(
+            normalize_source(&Some("best buy wholesale".to_string())),
+            "Best Buy"
+        );
         assert_eq!(normalize_source(&Some("Wayfair".to_string())), "Wayfair");
-        assert_eq!(normalize_source(&Some("Mech Distribution".to_string())), "Mech/PDX7");
+        assert_eq!(
+            normalize_source(&Some("Mech Distribution".to_string())),
+            "Mech/PDX7"
+        );
         assert_eq!(normalize_source(&Some("PDX7".to_string())), "Mech/PDX7");
-        assert_eq!(normalize_source(&Some("Amazon B-Stock".to_string())), "Amazon Bstock");
+        assert_eq!(
+            normalize_source(&Some("Amazon B-Stock".to_string())),
+            "Amazon Bstock"
+        );
         assert_eq!(normalize_source(&None), "Unknown");
     }
 
     #[test]
     fn test_normalize_condition() {
-        assert_eq!(normalize_condition(&Some("New Factory Sealed".to_string())), "New - Factory sealed");
-        assert_eq!(normalize_condition(&Some("Used - Good".to_string())), "Used - Good");
-        assert_eq!(normalize_condition(&Some("New - Canceled delivery".to_string())), "New - Canceled delivery");
+        assert_eq!(
+            normalize_condition(&Some("New Factory Sealed".to_string())),
+            "New - Factory sealed"
+        );
+        assert_eq!(
+            normalize_condition(&Some("Used - Good".to_string())),
+            "Used - Good"
+        );
+        assert_eq!(
+            normalize_condition(&Some("New - Canceled delivery".to_string())),
+            "New - Canceled delivery"
+        );
         assert_eq!(normalize_condition(&None), "New - Open box");
-        assert_eq!(normalize_condition(&Some("Some random string".to_string())), "New - Open box");
+        assert_eq!(
+            normalize_condition(&Some("Some random string".to_string())),
+            "New - Open box"
+        );
     }
 }

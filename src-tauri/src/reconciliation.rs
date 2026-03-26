@@ -1,6 +1,6 @@
 use crate::csv_parser;
 use crate::db::Database;
-use rusqlite::{params, Result};
+use rusqlite::{params, OptionalExtension, Result};
 use serde::Serialize;
 use tauri::State;
 
@@ -118,6 +118,145 @@ fn build_period_filter(
     }
 }
 
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn report_style_difference(high_bid: f64, retail_price: f64, cost_price: f64) -> f64 {
+    let cost_coefficient = if retail_price > 0.0 {
+        round2(cost_price / retail_price).max(0.0)
+    } else {
+        0.0
+    };
+    let retail_rounded = retail_price.round();
+    let report_cost = round2(retail_rounded * cost_coefficient);
+    let sale_value = round2(high_bid);
+    round2(sale_value - report_cost)
+}
+
+fn get_unmatched_difference_adjustment(
+    db: &Database,
+    filter: &PeriodFilter,
+) -> Result<f64, String> {
+    let sql = format!(
+        "
+        SELECT COALESCE(SUM(CAST(s.value AS REAL)), 0)
+        FROM settings s
+        WHERE s.key IN (
+            SELECT DISTINCT 'auction_unmatched_diff_' || ar.auction_id
+            FROM auction_results ar
+            WHERE 1 = 1
+            {filter_clause}
+        )
+        ",
+        filter_clause = filter.clause
+    );
+
+    if let Some((from, to)) = &filter.custom_range {
+        db.conn
+            .query_row(&sql, params![from, to], |row| row.get(0))
+            .map_err(|e| e.to_string())
+    } else {
+        db.conn
+            .query_row(&sql, [], |row| row.get(0))
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn get_unmatched_difference_adjustment_for_auction(
+    db: &Database,
+    auction_id: &str,
+) -> Result<f64, String> {
+    let key = format!("auction_unmatched_diff_{}", auction_id);
+    db.conn
+        .query_row(
+            "SELECT CAST(value AS REAL) FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|v| v.unwrap_or(0.0))
+        .map_err(|e| e.to_string())
+}
+
+fn calculate_filtered_report_difference_total(
+    db: &Database,
+    filter: &PeriodFilter,
+) -> Result<f64, String> {
+    let sql = format!(
+        "
+        SELECT
+            COALESCE(ar.high_bid, 0),
+            COALESCE(i.retail_price, 0),
+            COALESCE(i.cost_price, 0)
+        FROM auction_results ar
+        JOIN inventory_items i ON ar.item_id = i.id
+        WHERE 1 = 1
+          AND {status_sql} != 'Buyback'
+        {filter_clause}
+        ",
+        status_sql = ITEM_STATUS_SQL,
+        filter_clause = filter.clause
+    );
+
+    let mut stmt = db.conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(f64, f64, f64)> {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    };
+
+    let rows = if let Some((from, to)) = &filter.custom_range {
+        stmt.query_map(params![from, to], mapper)
+    } else {
+        stmt.query_map([], mapper)
+    }
+    .map_err(|e| e.to_string())?;
+
+    let mut total = 0.0;
+    for row in rows {
+        let (high_bid, retail_price, cost_price) = row.map_err(|e| e.to_string())?;
+        total += report_style_difference(high_bid, retail_price, cost_price);
+    }
+    Ok(round2(total))
+}
+
+fn calculate_auction_report_difference_total(
+    db: &Database,
+    auction_id: &str,
+) -> Result<f64, String> {
+    let sql = format!(
+        "
+            SELECT
+                COALESCE(ar.high_bid, 0),
+                COALESCE(i.retail_price, 0),
+                COALESCE(i.cost_price, 0)
+            FROM auction_results ar
+            JOIN inventory_items i ON ar.item_id = i.id
+            WHERE ar.auction_id = ?1
+              AND {status_sql} != 'Buyback'
+            ",
+        status_sql = ITEM_STATUS_SQL
+    );
+
+    let mut stmt = db.conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![auction_id], |row| {
+            Ok((
+                row.get::<_, f64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut total = 0.0;
+    for row in rows {
+        let (high_bid, retail_price, cost_price) = row.map_err(|e| e.to_string())?;
+        total += report_style_difference(high_bid, retail_price, cost_price);
+    }
+    Ok(round2(total))
+}
+
 pub struct ReconciliationManager;
 
 impl ReconciliationManager {
@@ -222,7 +361,7 @@ impl ReconciliationManager {
                 0.0
             };
             let net_profit = if status == "Sold" {
-                high_bid - cost - commission
+                high_bid - cost
             } else {
                 0.0
             };
@@ -311,7 +450,15 @@ impl ReconciliationManager {
                 COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN ar.high_bid ELSE 0 END), 0) as revenue,
                 COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN i.cost_price ELSE 0 END), 0) as cogs,
                 COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN ar.commission_amount ELSE 0 END), 0) as expenses,
-                COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN ar.net_profit ELSE 0 END), 0) as net_profit
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN {status_sql} = 'Sold' THEN COALESCE(ar.high_bid, 0) - COALESCE(i.cost_price, 0)
+                            ELSE 0
+                        END
+                    ),
+                    0
+                ) as net_profit
             FROM auction_results ar
             JOIN inventory_items i ON ar.item_id = i.id
             WHERE 1 = 1
@@ -342,7 +489,7 @@ impl ReconciliationManager {
             revenue,
             cogs,
             expenses,
-            net_profit,
+            _net_profit_sql,
         ) = if let Some((from, to)) = &filter.custom_range {
             db.conn
                 .query_row(&sql, params![from, to], mapper)
@@ -352,10 +499,13 @@ impl ReconciliationManager {
                 .query_row(&sql, [], mapper)
                 .map_err(|e| e.to_string())?
         };
+        let report_difference_total = calculate_filtered_report_difference_total(db, &filter)?;
+        let unmatched_adjustment = get_unmatched_difference_adjustment(db, &filter)?;
+        let adjusted_net_profit = round2(report_difference_total + unmatched_adjustment);
 
         let gross_profit = revenue - cogs;
         let margin_percent = if revenue > 0.0 {
-            (net_profit / revenue) * 100.0
+            (adjusted_net_profit / revenue) * 100.0
         } else {
             0.0
         };
@@ -376,7 +526,7 @@ impl ReconciliationManager {
             total_cogs: cogs,
             gross_profit,
             total_expenses: expenses,
-            net_profit,
+            net_profit: adjusted_net_profit,
             margin_percent,
             sold_items: sold_items as i32,
             total_lots: total_lots as i32,
@@ -408,10 +558,19 @@ impl ReconciliationManager {
                 COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN ar.high_bid ELSE 0 END), 0) as revenue,
                 COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN i.cost_price ELSE 0 END), 0) as cogs,
                 COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN ar.commission_amount ELSE 0 END), 0) as commission,
-                COALESCE(SUM(CASE WHEN {status_sql} = 'Sold' THEN ar.net_profit ELSE 0 END), 0) as net_profit
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN {status_sql} = 'Sold' THEN COALESCE(ar.high_bid, 0) - COALESCE(i.cost_price, 0)
+                            ELSE 0
+                        END
+                    ),
+                    0
+                ) + COALESCE(MAX(CAST(s.value AS REAL)), 0) as net_profit
             FROM auctions a
             JOIN auction_results ar ON ar.auction_id = a.id
             JOIN inventory_items i ON ar.item_id = i.id
+            LEFT JOIN settings s ON s.key = ('auction_unmatched_diff_' || a.id)
             WHERE a.status = 'Completed'
             {filter_clause}
             GROUP BY a.id, a.name, a.end_date, a.created_at
@@ -453,8 +612,23 @@ impl ReconciliationManager {
         }
         .map_err(|e| e.to_string())?;
 
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| e.to_string())
+        let mut summaries = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+
+        for summary in &mut summaries {
+            let report_total = calculate_auction_report_difference_total(db, &summary.auction_id)?;
+            let unmatched =
+                get_unmatched_difference_adjustment_for_auction(db, &summary.auction_id)?;
+            summary.net_profit = round2(report_total + unmatched);
+            summary.margin_percent = if summary.total_revenue > 0.0 {
+                (summary.net_profit / summary.total_revenue) * 100.0
+            } else {
+                0.0
+            };
+        }
+
+        Ok(summaries)
     }
 
     pub fn get_vendor_breakdown(
@@ -473,7 +647,7 @@ impl ReconciliationManager {
                 COALESCE(SUM(i.cost_price), 0) as total_cost,
                 COALESCE(SUM(ar.high_bid), 0) as revenue,
                 COALESCE(SUM(ar.high_bid * 1.15), 0) as revenue_with_comm,
-                COALESCE(SUM(ar.net_profit), 0) as profit_loss
+                COALESCE(SUM(COALESCE(ar.high_bid, 0) - COALESCE(i.cost_price, 0)), 0) as profit_loss
             FROM auction_results ar
             JOIN inventory_items i ON ar.item_id = i.id
             WHERE {status_sql} = 'Sold'

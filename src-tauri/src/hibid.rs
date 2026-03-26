@@ -90,7 +90,6 @@ pub fn export_to_hibid_csv(
     Ok(count)
 }
 
-
 mod tests {
     use super::*;
 
