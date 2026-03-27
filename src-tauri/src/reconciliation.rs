@@ -625,7 +625,12 @@ impl ReconciliationManager {
             let unmatched =
                 get_unmatched_difference_adjustment_for_auction(db, &summary.auction_id)?;
             summary.net_profit = round2(report_total + unmatched);
-            summary.plus_bonus = summary.net_profit + summary.total_revenue * REPORT_BONUS_RATE;
+            // Keep Plus Bonus aligned with Excel logic:
+            // matched rows: difference + sale*11%
+            // unmatched rows (stored as adjustment): high_bid + high_bid*11%
+            summary.plus_bonus = summary.net_profit
+                + summary.total_revenue * REPORT_BONUS_RATE
+                + unmatched * REPORT_BONUS_RATE;
             summary.margin_percent = if summary.total_revenue > 0.0 {
                 (summary.net_profit / summary.total_revenue) * 100.0
             } else {
