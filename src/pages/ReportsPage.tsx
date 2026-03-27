@@ -596,7 +596,7 @@ export function ReportsPage() {
                                 Auction History
                             </CardTitle>
                             <CardDescription>
-                                Auction | Date | Lots | Sold | Buyback | Unsold | Revenue | Commission | Net Profit | Margin
+                                Auction | Date | Lots | Sold | Buyback | Unsold | Revenue | Commission | Net Profit | Plus Bonus | Margin
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -613,13 +613,14 @@ export function ReportsPage() {
                                             <th className="px-3 py-2 text-right">Revenue</th>
                                             <th className="px-3 py-2 text-right">Commission</th>
                                             <th className="px-3 py-2 text-right">Net Profit</th>
+                                            <th className="px-3 py-2 text-right">Plus Bonus</th>
                                             <th className="px-3 py-2 text-right">Margin</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y">
                                         {auctionSummaries.length === 0 ? (
                                             <tr>
-                                                <td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">
+                                                <td colSpan={11} className="px-3 py-8 text-center text-muted-foreground">
                                                     No completed auctions in this period
                                                 </td>
                                             </tr>
@@ -635,6 +636,7 @@ export function ReportsPage() {
                                                     <td className="px-3 py-2 text-right">{formatCurrency(row.total_revenue)}</td>
                                                     <td className="px-3 py-2 text-right">{formatCurrency(row.total_commission)}</td>
                                                     <td className="px-3 py-2 text-right font-medium text-emerald-600">{formatCurrency(row.net_profit)}</td>
+                                                    <td className="px-3 py-2 text-right">{formatCurrency(row.plus_bonus)}</td>
                                                     <td className="px-3 py-2 text-right">{row.margin_percent.toFixed(1)}%</td>
                                                 </tr>
                                             ))

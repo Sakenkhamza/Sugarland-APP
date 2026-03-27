@@ -255,6 +255,7 @@ export interface AuctionSummary {
     total_cogs: number;
     total_commission: number;
     net_profit: number;
+    plus_bonus: number;
     margin_percent: number;
 }
 

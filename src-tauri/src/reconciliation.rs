@@ -12,6 +12,7 @@ const ITEM_STATUS_SQL: &str = "COALESCE(
         ELSE 'Unsold'
     END
 )";
+const REPORT_BONUS_RATE: f64 = 0.11;
 
 #[derive(Debug, Serialize)]
 pub struct ReconciliationResult {
@@ -52,6 +53,7 @@ pub struct AuctionSummary {
     pub total_cogs: f64,
     pub total_commission: f64,
     pub net_profit: f64,
+    pub plus_bonus: f64,
     pub margin_percent: f64,
 }
 
@@ -584,6 +586,7 @@ impl ReconciliationManager {
         let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<AuctionSummary> {
             let total_revenue: f64 = row.get(7)?;
             let net_profit: f64 = row.get(10)?;
+            let plus_bonus = net_profit + total_revenue * REPORT_BONUS_RATE;
             let margin_percent = if total_revenue > 0.0 {
                 (net_profit / total_revenue) * 100.0
             } else {
@@ -601,6 +604,7 @@ impl ReconciliationManager {
                 total_cogs: row.get(8)?,
                 total_commission: row.get(9)?,
                 net_profit,
+                plus_bonus,
                 margin_percent,
             })
         };
@@ -621,6 +625,7 @@ impl ReconciliationManager {
             let unmatched =
                 get_unmatched_difference_adjustment_for_auction(db, &summary.auction_id)?;
             summary.net_profit = round2(report_total + unmatched);
+            summary.plus_bonus = summary.net_profit + summary.total_revenue * REPORT_BONUS_RATE;
             summary.margin_percent = if summary.total_revenue > 0.0 {
                 (summary.net_profit / summary.total_revenue) * 100.0
             } else {

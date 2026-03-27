@@ -398,6 +398,7 @@ function mockResponse(cmd: string): any {
                     total_cogs: 3200,
                     total_commission: 1440,
                     net_profit: 4960,
+                    plus_bonus: 6016,
                     margin_percent: 51.7,
                 },
                 {
@@ -412,6 +413,7 @@ function mockResponse(cmd: string): any {
                     total_cogs: 2400,
                     total_commission: 1170,
                     net_profit: 4230,
+                    plus_bonus: 5088,
                     margin_percent: 54.2,
                 },
             ];
