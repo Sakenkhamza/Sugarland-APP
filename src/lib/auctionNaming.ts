@@ -28,8 +28,8 @@ export function buildManagerReportSheetName(auctionName: string): string {
 export function buildManagerReportFileName(auctionName: string): string {
     const number = extractAuctionNumber(auctionName);
     if (number) {
-        return `${AUCTION_PREFIX}_${number} min prices.xlsx`;
+        return `${AUCTION_PREFIX}_${number} manager.xlsx`;
     }
     const safeAuctionName = sanitizeFileNamePart(auctionName) || AUCTION_PREFIX;
-    return `${safeAuctionName} min prices.xlsx`;
+    return `${safeAuctionName} manager.xlsx`;
 }

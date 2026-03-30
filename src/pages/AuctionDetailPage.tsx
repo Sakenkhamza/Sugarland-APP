@@ -20,7 +20,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { formatCurrencyWhole, formatNumber, naturalSort } from '@/lib/utils';
 import { buildManagerReportFileName } from '@/lib/auctionNaming';
-import { buildManagerReportPreviewRows, getHistoryHeadersForAuction } from '@/lib/managerReport';
+import { buildManagerReportPreviewRows, buildManagerReportWorkbook, getHistoryHeadersForAuction } from '@/lib/managerReport';
 import { toast } from 'sonner';
 
 // ============================================================
@@ -358,93 +358,15 @@ export function AuctionDetailPage() {
     const handleExportExcel = async () => {
         if (!auction || auctionItems.length === 0) return;
         try {
-            const bids = await api.getAuctionResultBids(auction.id);
-            const bidByItemId = new Map(bids.map((row) => [row.item_id, row.high_bid]));
-            const rows = buildManagerReportPreviewRows({
+            const historyHeaders = getHistoryHeadersForAuction(auction.name);
+            const workbook = buildManagerReportWorkbook({
                 items: auctionItems,
                 auctionName: auction.name,
                 vendorCosts,
                 conditionMarginsBySupplier,
-                historyHeaders: getHistoryHeadersForAuction(auction.name),
+                historyHeaders,
                 repeaterStatsByTitle,
             });
-
-            const workbook = XLSX.utils.book_new();
-            const ws: XLSX.WorkSheet = {};
-            const headers = [
-                'Auction name',
-                'LotNumber',
-                'Quantity',
-                'Title',
-                'Vendor Code',
-                'Retail Price',
-                'Truckload',
-                'cost (%)',
-                'cost price ($)',
-                'Retail price',
-                '% min pr (+10%)',
-                'min price',
-                'High Bid (cents)',
-                'Selling price ($)',
-                'profit/loss',
-            ];
-
-            headers.forEach((header, index) => {
-                const col = XLSX.utils.encode_col(index);
-                ws[`${col}1`] = { t: 's', v: header };
-            });
-
-            rows.forEach((rowData, index) => {
-                const r = index + 2;
-                const highBidDollars = bidByItemId.get(rowData.item.id) ?? 0;
-                const highBidCents = Math.round(highBidDollars * 100);
-                const vendorCode = rowData.source === 'Best Buy' ? 'ATXSUGAR' : '';
-
-                ws[`A${r}`] = { t: 's', v: auction.name };
-                ws[`B${r}`] = { t: 's', v: rowData.lotNumber || '' };
-                ws[`C${r}`] = { t: 'n', v: 1 };
-                ws[`D${r}`] = { t: 's', v: rowData.title || '' };
-                ws[`E${r}`] = { t: 's', v: vendorCode };
-                ws[`F${r}`] = { t: 'n', v: rowData.item.retail_price || 0 };
-                ws[`G${r}`] = { t: 's', v: rowData.source || '' };
-                ws[`H${r}`] = { t: 'n', v: rowData.costPct || 0 };
-                ws[`I${r}`] = { t: 'n', f: `F${r}*H${r}` };
-                ws[`J${r}`] = { t: 'n', v: rowData.item.retail_price || 0 };
-                ws[`K${r}`] = { t: 'n', f: `J${r}*0.1` };
-                ws[`L${r}`] = { t: 'n', f: `I${r}+K${r}` };
-                ws[`M${r}`] = { t: 'n', v: highBidCents };
-                ws[`N${r}`] = { t: 'n', f: `M${r}/100` };
-                ws[`O${r}`] = { t: 'n', f: `N${r}-I${r}` };
-            });
-
-            const lastDataRow = rows.length + 1;
-            const totalRow = lastDataRow + 1;
-            ws[`A${totalRow}`] = { t: 's', v: 'Итого' };
-            ws[`C${totalRow}`] = { t: 'n', f: `SUM(C2:C${lastDataRow})` };
-            ws[`F${totalRow}`] = { t: 'n', f: `SUM(F2:F${lastDataRow})` };
-            ws[`N${totalRow}`] = { t: 'n', f: `SUM(N2:N${lastDataRow})` };
-            ws[`O${totalRow}`] = { t: 'n', f: `SUM(O2:O${lastDataRow})` };
-
-            ws['!ref'] = `A1:O${totalRow}`;
-            ws['!cols'] = [
-                { wch: 26 },
-                { wch: 12 },
-                { wch: 10 },
-                { wch: 45 },
-                { wch: 14 },
-                { wch: 13 },
-                { wch: 14 },
-                { wch: 10 },
-                { wch: 13 },
-                { wch: 13 },
-                { wch: 14 },
-                { wch: 13 },
-                { wch: 15 },
-                { wch: 15 },
-                { wch: 13 },
-            ];
-
-            XLSX.utils.book_append_sheet(workbook, ws, 'Report');
 
             const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
             const defaultName = buildManagerReportFileName(auction.name);

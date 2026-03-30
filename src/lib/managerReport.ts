@@ -5,6 +5,7 @@ import { buildManagerReportSheetName } from '@/lib/auctionNaming';
 type VendorCostMap = Record<string, number>;
 type ConditionMarginMap = Record<string, Record<string, number>>;
 type RepeaterStatsMap = Record<string, Record<string, number>>;
+type SaleOrderIndex = Record<string, number>;
 
 export interface ManagerReportOptions {
     items: InventoryItem[];
@@ -55,6 +56,43 @@ export function getHistoryHeadersForAuction(auctionName?: string): string[] {
     return Array.from({ length: windowSize }, (_, idx) => `S${start + idx}`);
 }
 
+function naturalLotCompare(a: string, b: string): number {
+    const chunkPattern = /(\d+)|(\D+)/g;
+    const aParts = (a || '').match(chunkPattern) || [];
+    const bParts = (b || '').match(chunkPattern) || [];
+
+    for (let idx = 0; idx < Math.max(aParts.length, bParts.length); idx += 1) {
+        const aPart = aParts[idx] || '';
+        const bPart = bParts[idx] || '';
+        const aNum = Number.parseInt(aPart, 10);
+        const bNum = Number.parseInt(bPart, 10);
+
+        if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) {
+            if (aNum !== bNum) return aNum - bNum;
+            continue;
+        }
+
+        const normalizedA = aPart.toLowerCase();
+        const normalizedB = bPart.toLowerCase();
+        if (normalizedA < normalizedB) return -1;
+        if (normalizedA > normalizedB) return 1;
+    }
+
+    return 0;
+}
+
+export function buildManagerReportSaleOrderIndex(items: InventoryItem[]): SaleOrderIndex {
+    const natural = [...items].sort((a, b) => (
+        naturalLotCompare(a.lot_number || '', b.lot_number || '')
+        || a.id.localeCompare(b.id)
+    ));
+
+    return natural.reduce<SaleOrderIndex>((result, item, index) => {
+        result[item.id] = index + 1;
+        return result;
+    }, {});
+}
+
 function deriveCostPct(item: InventoryItem, vendorCosts: VendorCostMap): number {
     const source = item.source || '';
     const sourceCost = vendorCosts[source];
@@ -98,6 +136,7 @@ export function buildManagerReportPreviewRows(options: ManagerReportOptions): Ma
         historyHeaders = getHistoryHeadersForAuction(options.auctionName),
         repeaterStatsByTitle = {},
     } = options;
+    const derivedSaleOrderByItemId = buildManagerReportSaleOrderIndex(items);
 
     return items.map((item) => {
         const costPct = deriveCostPct(item, vendorCosts);
@@ -121,7 +160,9 @@ export function buildManagerReportPreviewRows(options: ManagerReportOptions): Ma
         return {
             item,
             lotNumber: item.lot_number || '',
-            saleOrder: item.sale_order ?? '',
+            saleOrder: typeof item.sale_order === 'number'
+                ? item.sale_order
+                : (derivedSaleOrderByItemId[item.id] ?? ''),
             title: item.raw_title || '',
             retailPrice,
             source: item.source || '',
