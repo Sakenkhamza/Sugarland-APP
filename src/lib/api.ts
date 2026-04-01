@@ -15,6 +15,7 @@ import type {
     ValidationResult,
     FinishAuctionResult,
     AuctionReport,
+    PalletManifestExportResult,
     AuctionResultBid,
     ConditionType,
     SourceType,
@@ -183,6 +184,12 @@ export const api = {
 
     openReportFile: (filePath: string) =>
         invokeCommand<void>('open_report_file', { filePath }),
+
+    generatePalletManifestReport: (filePath: string, savePath: string) =>
+        invokeCommand<PalletManifestExportResult>('generate_pallet_manifest_report', {
+            filePath,
+            savePath,
+        }),
 
     // Condition Types
     getConditionTypes: () =>

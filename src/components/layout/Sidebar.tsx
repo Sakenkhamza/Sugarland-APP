@@ -4,6 +4,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import {
     LayoutDashboard,
     Package,
+    Boxes,
     Gavel,
     FileBarChart,
     Settings,
@@ -16,6 +17,7 @@ const navigation = [
     { name: 'Inventory', href: '/inventory', icon: Package },
     { name: 'Auctions', href: '/auctions', icon: Gavel },
     { name: 'Reports', href: '/reports', icon: FileBarChart },
+    { name: 'Palets', href: '/palets', icon: Boxes },
     { name: 'Settings', href: '/settings', icon: Settings },
 ];
 

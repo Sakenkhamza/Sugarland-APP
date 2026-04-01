@@ -301,6 +301,12 @@ export interface FinishAuctionResult {
     summary_report: string;
 }
 
+export interface PalletManifestExportResult {
+    file_path: string;
+    items_count: number;
+    pallets_count: number;
+}
+
 // --- Condition Types ---
 export interface ConditionType {
     id: string;

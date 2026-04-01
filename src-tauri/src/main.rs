@@ -8,6 +8,7 @@ mod csv_parser;
 mod db;
 mod hibid;
 mod nlp;
+mod pallet_manifests;
 mod pricing;
 mod reconciliation;
 
@@ -828,6 +829,7 @@ fn main() {
             reconciliation::get_vendor_breakdown,
             // CSV Validation
             csv_parser::validate_csv,
+            pallet_manifests::generate_pallet_manifest_report,
             wipe_database,
         ])
         .run(tauri::generate_context!())

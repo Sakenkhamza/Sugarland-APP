@@ -6,6 +6,7 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { InventoryPage } from '@/pages/InventoryPage';
 import { AuctionsPage } from '@/pages/AuctionsPage';
 import { ReportsPage } from '@/pages/ReportsPage';
+import { PaletsPage } from '@/pages/PaletsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AuctionDetailPage } from '@/pages/AuctionDetailPage';
 import { UpdateGuard } from '@/components/layout/UpdateGuard';
@@ -22,6 +23,7 @@ createRoot(document.getElementById('root')!).render(
                         <Route path="/auctions" element={<AuctionsPage />} />
                         <Route path="/auctions/:id" element={<AuctionDetailPage />} />
                         <Route path="/reports" element={<ReportsPage />} />
+                        <Route path="/palets" element={<PaletsPage />} />
                         <Route path="/settings" element={<SettingsPage />} />
                     </Route>
                 </Routes>
