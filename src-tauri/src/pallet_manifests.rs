@@ -134,10 +134,6 @@ fn build_list_sheet_layout(group_count: usize) -> ListSheetLayout {
     }
 }
 
-fn roundup_to_nearest_hundred_minus_five(value: f64) -> f64 {
-    (value / 100.0).ceil() * 100.0 - 5.0
-}
-
 fn width_xml_value(width: f64) -> String {
     if width.fract().abs() < f64::EPSILON {
         format!("{width:.0}")
@@ -495,10 +491,6 @@ fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(
     let number_cell_format = Format::new()
         .set_border(FormatBorder::Thin)
         .set_num_format("#,##0");
-    let highlighted_number_cell_format = Format::new()
-        .set_border(FormatBorder::Thin)
-        .set_num_format("#,##0")
-        .set_background_color(Color::RGB(0xFFFF00));
     let total_label_format = Format::new()
         .set_bold()
         .set_background_color(Color::RGB(0xFFFF00))
@@ -559,21 +551,8 @@ fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(
     for (index, group) in groups.iter().enumerate() {
         let row = index as u32 + 1;
         let excel_row = row + 1;
-        let pallet_price = if index == 0 {
-            roundup_to_nearest_hundred_minus_five(group.ext_total * DEFAULT_PALLET_SALE_PERCENT)
-        } else {
-            group.ext_total * DEFAULT_PALLET_SALE_PERCENT
-        };
-        let pallet_price_formula = if index == 0 {
-            format!("=ROUNDUP(C{excel_row}*{sale_percent_cell_ref},-2)-5")
-        } else {
-            format!("=C{excel_row}*{sale_percent_cell_ref}")
-        };
-        let pallet_price_format = if index == 0 {
-            &highlighted_number_cell_format
-        } else {
-            &number_cell_format
-        };
+        let pallet_price = group.ext_total * DEFAULT_PALLET_SALE_PERCENT;
+        let pallet_price_formula = format!("=C{excel_row}*{sale_percent_cell_ref}");
         list_price_results.push(pallet_price);
 
         worksheet
@@ -591,7 +570,7 @@ fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(
                 3,
                 Formula::new(pallet_price_formula)
                     .set_result(formula_result(pallet_price)),
-                pallet_price_format,
+                &number_cell_format,
             )
             .map_err(|e| format!("Failed to write List pallet price: {e}"))?;
     }
