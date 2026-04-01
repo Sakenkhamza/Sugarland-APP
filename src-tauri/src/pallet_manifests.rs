@@ -294,6 +294,9 @@ fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(
 
     for (index, group) in groups.iter().enumerate() {
         let row = index as u32 + 1;
+        let excel_row = row + 1;
+        let pallet_price = group.ext_total * 0.2;
+
         worksheet
             .write_string_with_format(row, 0, &group.pallet_id, &text_cell_format)
             .map_err(|e| format!("Failed to write List pallet id: {e}"))?;
@@ -304,7 +307,13 @@ fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(
             .write_number_with_format(row, 2, group.ext_total, &number_cell_format)
             .map_err(|e| format!("Failed to write List retail sum: {e}"))?;
         worksheet
-            .write_number_with_format(row, 3, group.ext_total * 0.2, &number_cell_format)
+            .write_formula_with_format(
+                row,
+                3,
+                Formula::new(format!("=C{excel_row}*20%"))
+                    .set_result(formula_result(pallet_price)),
+                &number_cell_format,
+            )
             .map_err(|e| format!("Failed to write List pallet price: {e}"))?;
     }
 
@@ -632,7 +641,7 @@ fn write_pallets_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Resul
             .write_formula_with_format(
                 summary_row,
                 3,
-                Formula::new(format!("=G{excel_summary_row}*20%"))
+                Formula::new(format!("=VLOOKUP(H{excel_summary_row},List!A:D,4,FALSE)"))
                     .set_result(formula_result(pallet_price)),
                 &summary_price_format,
             )
