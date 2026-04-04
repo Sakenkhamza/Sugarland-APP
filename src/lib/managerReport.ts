@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import type { InventoryItem } from '@/types';
 import { buildManagerReportSheetName } from '@/lib/auctionNaming';
 
@@ -19,6 +19,7 @@ export interface ManagerReportOptions {
 export interface ManagerReportPreviewRow {
     item: InventoryItem;
     lotNumber: string;
+    readDescriptionFlag: boolean;
     saleOrder: number | '';
     title: string;
     retailPrice: number;
@@ -35,6 +36,7 @@ export interface ManagerReportPreviewRow {
 
 export const HISTORY_HEADERS = ['S20', 'S21', 'S22', 'S23', 'S24', 'S25', 'S26', 'S27'] as const;
 const REPEAT_HEADER = '\u041f\u043e\u0432\u0442\u043e\u0440'; // Repeat
+const FLAGGED_LOT_FILL_COLOR = 'FFF4B183';
 
 function round2(value: number): number {
     return Math.round(value * 100) / 100;
@@ -118,6 +120,26 @@ function setCellNumberFormat(worksheet: XLSX.WorkSheet, cellAddress: string, for
     if (cell) cell.z = format;
 }
 
+function setCellFill(worksheet: XLSX.WorkSheet, cellAddress: string, fillColor: string) {
+    const cell = worksheet[cellAddress] as (XLSX.CellObject & {
+        s?: {
+            fill?: {
+                patternType?: string;
+                fgColor?: { rgb?: string };
+            };
+        };
+    }) | undefined;
+    if (!cell) return;
+
+    cell.s = {
+        ...(cell.s || {}),
+        fill: {
+            patternType: 'solid',
+            fgColor: { rgb: fillColor },
+        },
+    };
+}
+
 function applyFormats(worksheet: XLSX.WorkSheet, lastRow: number, historyHeaders: string[]) {
     const percentCols = ['G', 'H'];
     const numberColIndexes = [3, 8, 9, 10, 12, ...historyHeaders.map((_, idx) => 13 + idx)];
@@ -126,6 +148,13 @@ function applyFormats(worksheet: XLSX.WorkSheet, lastRow: number, historyHeaders
         percentCols.forEach((col) => setCellNumberFormat(worksheet, `${col}${row}`, '0%'));
         numberCols.forEach((col) => setCellNumberFormat(worksheet, `${col}${row}`, '#,##0'));
     }
+}
+
+function applyFlaggedLotStyles(worksheet: XLSX.WorkSheet, previewRows: ManagerReportPreviewRow[]) {
+    previewRows.forEach((rowData, index) => {
+        if (!rowData.readDescriptionFlag) return;
+        setCellFill(worksheet, `A${index + 2}`, FLAGGED_LOT_FILL_COLOR);
+    });
 }
 
 export function buildManagerReportPreviewRows(options: ManagerReportOptions): ManagerReportPreviewRow[] {
@@ -160,6 +189,7 @@ export function buildManagerReportPreviewRows(options: ManagerReportOptions): Ma
         return {
             item,
             lotNumber: item.lot_number || '',
+            readDescriptionFlag: Boolean(item.read_description_flag),
             saleOrder: typeof item.sale_order === 'number'
                 ? item.sale_order
                 : (derivedSaleOrderByItemId[item.id] ?? ''),
@@ -256,6 +286,7 @@ export function buildManagerReportWorkbook(options: ManagerReportOptions): XLSX.
     const lastColumnIndex = 12 + historyHeaders.length;
     worksheet['!autofilter'] = { ref: `A1:${XLSX.utils.encode_col(lastColumnIndex)}${lastRow}` };
     applyFormats(worksheet, lastRow, historyHeaders);
+    applyFlaggedLotStyles(worksheet, previewRows);
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, buildManagerReportSheetName(auctionName));

@@ -38,6 +38,7 @@ export interface InventoryItem {
     vendor_code?: string;
     source?: string;
     condition?: string;
+    read_description_flag?: boolean;
 
     // Normalized data
     normalized_title?: string;
@@ -147,6 +148,7 @@ export interface BStockManifestRow {
     'Vendor Code': string;
     'Retail Price': string;
     Source: string;
+    'Read Description Flag'?: string;
 }
 
 export interface HiBidExportRow {

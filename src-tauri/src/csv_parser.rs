@@ -29,6 +29,9 @@ pub struct BStockManifestRow {
 
     #[serde(rename = "Description", default)]
     pub description: Option<String>,
+
+    #[serde(rename = "Read Description Flag", default)]
+    pub read_description_flag: Option<String>,
 }
 
 /// Parse a B-Stock manifest CSV file into structured rows
@@ -110,6 +113,20 @@ pub fn extract_and_normalize_condition(description: &Option<String>) -> String {
     }
 
     normalize_condition(&Some(raw_condition))
+}
+
+pub fn parse_read_description_flag(value: &Option<String>) -> bool {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            matches!(
+                v.to_ascii_lowercase().as_str(),
+                "true" | "1" | "yes" | "y"
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// Normalize a condition string to a canonical condition label
@@ -344,5 +361,15 @@ mod tests {
             normalize_condition(&Some("Some random string".to_string())),
             "New - Open box"
         );
+    }
+
+    #[test]
+    fn test_parse_read_description_flag() {
+        assert!(parse_read_description_flag(&Some("True".to_string())));
+        assert!(parse_read_description_flag(&Some(" yes ".to_string())));
+        assert!(parse_read_description_flag(&Some("1".to_string())));
+        assert!(!parse_read_description_flag(&Some("False".to_string())));
+        assert!(!parse_read_description_flag(&Some("0".to_string())));
+        assert!(!parse_read_description_flag(&None));
     }
 }

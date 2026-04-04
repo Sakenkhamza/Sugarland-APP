@@ -103,6 +103,7 @@ mod tests {
             vendor_code: Some("UN65TU7000".to_string()),
             source: Some("Best Buy".to_string()),
             condition: Some("New".to_string()),
+            read_description_flag: false,
             normalized_title: None,
             extracted_brand: Some("Samsung".to_string()),
             extracted_model: None,

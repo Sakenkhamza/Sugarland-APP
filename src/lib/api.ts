@@ -315,6 +315,7 @@ function mockResponse(cmd: string): any {
                 min_price: 50.0 + i * 5,
                 current_status: ['InStock', 'Listed', 'Sold', 'Buyback'][i % 4],
                 source: 'Best Buy',
+                read_description_flag: i % 3 === 0,
                 created_at: new Date().toISOString(),
             }));
         case 'get_relistable_inventory_items':
@@ -327,6 +328,7 @@ function mockResponse(cmd: string): any {
                 min_price: 50.0 + i * 5,
                 current_status: i % 2 === 0 ? 'Buyback' : 'Unsold',
                 source: 'Best Buy',
+                read_description_flag: i % 3 === 0,
                 created_at: new Date().toISOString(),
             }));
         case 'assign_items_to_auction':

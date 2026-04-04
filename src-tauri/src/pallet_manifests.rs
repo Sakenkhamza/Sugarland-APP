@@ -10,7 +10,7 @@ use std::{
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
 
 const DEFAULT_PALLET_SALE_PERCENT: f64 = 0.2;
-const DEFAULT_BSTOCK_MAX_COST_USD: f64 = 1500.0;
+const DEFAULT_BSTOCK_MAX_COST_USD: f64 = 2000.0;
 const DEFAULT_DELIVERY_COST_USD: f64 = 2200.0;
 
 #[derive(Debug, Serialize)]
@@ -74,8 +74,17 @@ struct PalletManifestRow {
 #[derive(Debug, Clone)]
 struct PalletGroup {
     pallet_id: String,
+    #[allow(dead_code)]
     rows: Vec<PalletManifestRow>,
+    display_rows: Vec<PalletManifestRow>,
     asin_count: usize,
+    qty_total: f64,
+    ext_total: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ItemSummary {
+    item_description: String,
     qty_total: f64,
     ext_total: f64,
 }
@@ -91,6 +100,7 @@ struct BrandSummary {
 struct ListSheetLayout {
     sum_excel_row: u32,
     admin_title_excel_row: u32,
+    average_item_cost_excel_row: u32,
     sale_percent_excel_row: u32,
     purchase_pct_excel_row: u32,
     purchase_usd_excel_row: u32,
@@ -118,19 +128,20 @@ fn formula_result(value: f64) -> String {
 }
 
 fn build_list_sheet_layout(group_count: usize) -> ListSheetLayout {
-    let sum_excel_row = group_count as u32 + 2;
-    let admin_title_excel_row = sum_excel_row + 3;
+    let sum_excel_row = group_count as u32 + 3;
+    let admin_title_excel_row = sum_excel_row + 2;
 
     ListSheetLayout {
         sum_excel_row,
         admin_title_excel_row,
-        sale_percent_excel_row: admin_title_excel_row + 1,
-        purchase_pct_excel_row: admin_title_excel_row + 2,
-        purchase_usd_excel_row: admin_title_excel_row + 3,
-        bstock_cost_excel_row: admin_title_excel_row + 4,
-        delivery_cost_excel_row: admin_title_excel_row + 5,
-        resale_profit_excel_row: admin_title_excel_row + 6,
-        roi_excel_row: admin_title_excel_row + 7,
+        average_item_cost_excel_row: admin_title_excel_row + 1,
+        sale_percent_excel_row: admin_title_excel_row + 2,
+        purchase_pct_excel_row: admin_title_excel_row + 3,
+        purchase_usd_excel_row: admin_title_excel_row + 4,
+        bstock_cost_excel_row: admin_title_excel_row + 5,
+        delivery_cost_excel_row: admin_title_excel_row + 6,
+        resale_profit_excel_row: admin_title_excel_row + 7,
+        roi_excel_row: admin_title_excel_row + 8,
     }
 }
 
@@ -157,11 +168,11 @@ fn replace_column_widths(xml: &str, widths: &[f64]) -> Result<String, String> {
 
     for width in widths {
         let Some(width_start_offset) = updated_xml[search_start..].find("width=\"") else {
-            return Err("Failed to locate width attribute in worksheet XML".to_string());
+            break;
         };
         let width_start = search_start + width_start_offset + 7;
         let Some(width_end_offset) = updated_xml[width_start..].find('"') else {
-            return Err("Failed to locate width attribute end in worksheet XML".to_string());
+            break;
         };
         let width_end = width_start + width_end_offset;
 
@@ -172,39 +183,7 @@ fn replace_column_widths(xml: &str, widths: &[f64]) -> Result<String, String> {
     Ok(updated_xml)
 }
 
-fn replace_pallets_sheet_view(xml: &str, last_excel_row: u32) -> Result<String, String> {
-    let sheet_view_start = xml
-        .find("<sheetView ")
-        .or_else(|| xml.find("<sheetView>"))
-        .ok_or_else(|| "Failed to locate sheetView in Pallets worksheet XML".to_string())?;
-
-    let replacement = format!(
-        "<sheetView topLeftCell=\"C{top_left_row}\" zoomScale=\"60\" zoomScaleNormal=\"60\" workbookViewId=\"0\"><selection activeCell=\"D{last_excel_row}\" sqref=\"D{last_excel_row}\"/></sheetView>",
-        top_left_row = last_excel_row.saturating_sub(29).max(1),
-    );
-
-    if let Some(sheet_view_end_offset) = xml[sheet_view_start..].find("/>") {
-        let sheet_view_end = sheet_view_start + sheet_view_end_offset + 2;
-        let mut updated_xml = xml.to_string();
-        updated_xml.replace_range(sheet_view_start..sheet_view_end, &replacement);
-        return Ok(updated_xml);
-    }
-
-    if let Some(sheet_view_end_offset) = xml[sheet_view_start..].find("</sheetView>") {
-        let sheet_view_end = sheet_view_start + sheet_view_end_offset + "</sheetView>".len();
-        let mut updated_xml = xml.to_string();
-        updated_xml.replace_range(sheet_view_start..sheet_view_end, &replacement);
-        return Ok(updated_xml);
-    }
-
-    Err("Failed to replace sheetView in Pallets worksheet XML".to_string())
-}
-
-fn update_generated_workbook_xml(
-    output_path: &str,
-    items_count: usize,
-    pallets_count: usize,
-) -> Result<(), String> {
+fn update_generated_workbook_xml(output_path: &str) -> Result<(), String> {
     let temp_path = format!("{output_path}.tmp");
     let source_file =
         File::open(output_path).map_err(|e| format!("Failed to reopen generated workbook: {e}"))?;
@@ -214,11 +193,22 @@ fn update_generated_workbook_xml(
         File::create(&temp_path).map_err(|e| format!("Failed to create temp workbook: {e}"))?;
     let mut writer = ZipWriter::new(temp_file);
 
-    let list_widths = [30.88671875, 13.109375, 16.0, 11.44140625, 13.0];
+    let list_widths = [3.6640625, 30.88671875, 13.109375, 16.0, 11.44140625];
     let sheet3_widths = [36.44140625, 11.109375, 16.44140625];
     let sheet2_widths = [29.5546875, 13.5546875, 16.44140625];
     let sheet4_widths = [5.44140625, 29.5546875, 13.109375, 16.0];
-    let pallets_widths = [26.44140625, 30.6640625, 14.6640625, 81.5546875, 4.5546875, 10.33203125, 10.0, 29.5546875];
+    let pallets_widths = [
+        26.44140625,
+        30.6640625,
+        14.6640625,
+        81.5546875,
+        4.5546875,
+        10.33203125,
+        10.0,
+        29.5546875,
+        13.0,
+    ];
+    let summary_widths = [57.21875, 10.44140625, 15.77734375];
     let brands_widths = [
         29.5546875,
         13.0,
@@ -234,8 +224,8 @@ fn update_generated_workbook_xml(
         12.5546875,
         10.44140625,
         13.0,
+        13.0,
     ];
-    let pallets_last_excel_row = items_count as u32 + (pallets_count as u32 * 2) + 1;
 
     for index in 0..archive.len() {
         let mut file = archive
@@ -258,31 +248,35 @@ fn update_generated_workbook_xml(
         let maybe_xml = match name.as_str() {
             "xl/worksheets/sheet2.xml" => Some(replace_column_widths(
                 std::str::from_utf8(&content)
-                    .map_err(|e| format!("Failed to decode List worksheet XML: {e}"))?,
-                &list_widths,
-            )?),
-            "xl/worksheets/sheet3.xml" => Some(replace_column_widths(
-                std::str::from_utf8(&content)
                     .map_err(|e| format!("Failed to decode Sheet3 worksheet XML: {e}"))?,
                 &sheet3_widths,
             )?),
-            "xl/worksheets/sheet4.xml" => Some(replace_column_widths(
+            "xl/worksheets/sheet3.xml" => Some(replace_column_widths(
                 std::str::from_utf8(&content)
                     .map_err(|e| format!("Failed to decode Sheet2 worksheet XML: {e}"))?,
                 &sheet2_widths,
             )?),
-            "xl/worksheets/sheet5.xml" => Some(replace_column_widths(
+            "xl/worksheets/sheet4.xml" => Some(replace_column_widths(
                 std::str::from_utf8(&content)
                     .map_err(|e| format!("Failed to decode Sheet4 worksheet XML: {e}"))?,
                 &sheet4_widths,
             )?),
-            "xl/worksheets/sheet6.xml" => {
-                let xml = std::str::from_utf8(&content)
-                    .map_err(|e| format!("Failed to decode Pallets worksheet XML: {e}"))?;
-                let xml = replace_column_widths(xml, &pallets_widths)?;
-                Some(replace_pallets_sheet_view(&xml, pallets_last_excel_row)?)
-            }
+            "xl/worksheets/sheet5.xml" => Some(replace_column_widths(
+                std::str::from_utf8(&content)
+                    .map_err(|e| format!("Failed to decode List worksheet XML: {e}"))?,
+                &list_widths,
+            )?),
+            "xl/worksheets/sheet6.xml" => Some(replace_column_widths(
+                std::str::from_utf8(&content)
+                    .map_err(|e| format!("Failed to decode Pallets worksheet XML: {e}"))?,
+                &pallets_widths,
+            )?),
             "xl/worksheets/sheet7.xml" => Some(replace_column_widths(
+                std::str::from_utf8(&content)
+                    .map_err(|e| format!("Failed to decode summary worksheet XML: {e}"))?,
+                &summary_widths,
+            )?),
+            "xl/worksheets/sheet8.xml" => Some(replace_column_widths(
                 std::str::from_utf8(&content)
                     .map_err(|e| format!("Failed to decode Brands worksheet XML: {e}"))?,
                 &brands_widths,
@@ -391,6 +385,7 @@ fn build_pallet_groups(rows: &[PalletManifestRow]) -> Vec<PalletGroup> {
     grouped
         .into_iter()
         .map(|(pallet_id, rows)| {
+            let display_rows = aggregate_pallet_rows(&rows);
             let asin_count = rows.len();
             let qty_total = rows.iter().map(|row| row.qty).sum::<f64>();
             let ext_total = rows.iter().map(|row| row.ext_retail).sum::<f64>();
@@ -398,12 +393,76 @@ fn build_pallet_groups(rows: &[PalletManifestRow]) -> Vec<PalletGroup> {
             PalletGroup {
                 pallet_id,
                 rows,
+                display_rows,
                 asin_count,
                 qty_total,
                 ext_total,
             }
         })
         .collect()
+}
+
+fn aggregate_pallet_rows(rows: &[PalletManifestRow]) -> Vec<PalletManifestRow> {
+    let mut aggregated_rows: Vec<PalletManifestRow> = Vec::new();
+    let mut row_index_by_key: HashMap<(String, String, String, String, String, String), usize> =
+        HashMap::new();
+
+    for row in rows {
+        let key = (
+            row.category.clone(),
+            row.subcategory.clone(),
+            row.asin.clone(),
+            row.item_description.clone(),
+            row.unit_retail_text.clone(),
+            row.pallet_id.clone(),
+        );
+
+        if let Some(index) = row_index_by_key.get(&key) {
+            let aggregated = &mut aggregated_rows[*index];
+            aggregated.qty += row.qty;
+            aggregated.ext_retail += row.ext_retail;
+            continue;
+        }
+
+        row_index_by_key.insert(key, aggregated_rows.len());
+        aggregated_rows.push(row.clone());
+    }
+
+    aggregated_rows
+}
+
+fn build_item_summaries(rows: &[PalletManifestRow]) -> Vec<ItemSummary> {
+    let mut grouped: HashMap<String, (f64, f64)> = HashMap::new();
+
+    for row in rows {
+        let item_key = if row.item_description.trim().is_empty() {
+            "(blank)".to_string()
+        } else {
+            row.item_description.trim().to_string()
+        };
+
+        let entry = grouped.entry(item_key).or_insert((0.0, 0.0));
+        entry.0 += row.qty;
+        entry.1 += row.ext_retail;
+    }
+
+    let mut result = grouped
+        .into_iter()
+        .map(|(item_description, (qty_total, ext_total))| ItemSummary {
+            item_description,
+            qty_total,
+            ext_total,
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by(|left, right| {
+        left.item_description
+            .to_lowercase()
+            .cmp(&right.item_description.to_lowercase())
+            .then_with(|| left.item_description.cmp(&right.item_description))
+    });
+
+    result
 }
 
 fn build_brand_summaries(rows: &[PalletManifestRow]) -> Vec<BrandSummary> {
@@ -476,6 +535,7 @@ fn write_raw_sheet(workbook: &mut Workbook, sheet_name: &str, raw_lines: &[Strin
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), String> {
     let worksheet = workbook.add_worksheet();
     worksheet
@@ -769,6 +829,337 @@ fn write_list_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(
     Ok(())
 }
 
+fn write_list_sheet_v2(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), String> {
+    let worksheet = workbook.add_worksheet();
+    worksheet
+        .set_name("List")
+        .map_err(|e| format!("Failed to set List sheet name: {e}"))?;
+    worksheet
+        .set_zoom(96)
+        .set_active(true)
+        .set_selected(true)
+        .set_first_tab(true);
+    worksheet
+        .set_selection(23, 2, 23, 2)
+        .map_err(|e| format!("Failed to set List selection: {e}"))?;
+
+    let header_format = Format::new().set_bold().set_border(FormatBorder::Thin);
+    let text_cell_format = Format::new().set_border(FormatBorder::Thin);
+    let number_cell_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_num_format("#,##0");
+    let total_label_format = Format::new()
+        .set_bold()
+        .set_background_color(Color::RGB(0xFFFF00))
+        .set_border_left(FormatBorder::Thin)
+        .set_border_right(FormatBorder::Thin);
+    let total_number_format = Format::new()
+        .set_bold()
+        .set_background_color(Color::RGB(0xFFFF00))
+        .set_num_format("#,##0");
+    let admin_avg_label_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00));
+    let admin_avg_number_format = Format::new()
+        .set_bold()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00))
+        .set_num_format("#,##0");
+    let admin_block_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00));
+    let admin_percent_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00))
+        .set_num_format("0%");
+    let admin_bold_format = Format::new()
+        .set_bold()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00));
+    let admin_bold_number_format = Format::new()
+        .set_bold()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00))
+        .set_num_format("#,##0");
+    let admin_bold_percent_format = Format::new()
+        .set_bold()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xFFFF00))
+        .set_num_format("0%");
+    let admin_title_format = Format::new().set_bold();
+
+    let headers = [
+        "Pallet ID",
+        "Count of ASIN",
+        "Sum of Ext, Retail",
+        "Pallet price",
+    ];
+    let widths = [3.6640625, 30.88671875, 13.109375, 16.0, 11.44140625];
+    let layout = build_list_sheet_layout(groups.len());
+    let sale_percent_cell_ref = format!("$C${}", layout.sale_percent_excel_row);
+    let data_start_excel_row = 3_u32;
+    let data_end_excel_row = groups.len() as u32 + 2;
+    let mut list_price_results = Vec::with_capacity(groups.len());
+
+    for (index, width) in widths.iter().enumerate() {
+        worksheet
+            .set_column_width(index as u16, *width)
+            .map_err(|e| format!("Failed to set List column width: {e}"))?;
+    }
+
+    for (col, header) in headers.iter().enumerate() {
+        worksheet
+            .write_string_with_format(1, (col + 1) as u16, *header, &header_format)
+            .map_err(|e| format!("Failed to write List header: {e}"))?;
+    }
+
+    for (index, group) in groups.iter().enumerate() {
+        let row = index as u32 + 2;
+        let excel_row = row + 1;
+        let pallet_price = group.ext_total * DEFAULT_PALLET_SALE_PERCENT;
+        let pallet_price_formula = format!("=D{excel_row}*{sale_percent_cell_ref}");
+        list_price_results.push(pallet_price);
+
+        worksheet
+            .write_string_with_format(row, 1, &group.pallet_id, &text_cell_format)
+            .map_err(|e| format!("Failed to write List pallet id: {e}"))?;
+        worksheet
+            .write_number_with_format(row, 2, group.asin_count as f64, &number_cell_format)
+            .map_err(|e| format!("Failed to write List ASIN count: {e}"))?;
+        worksheet
+            .write_number_with_format(row, 3, group.ext_total, &number_cell_format)
+            .map_err(|e| format!("Failed to write List retail sum: {e}"))?;
+        worksheet
+            .write_formula_with_format(
+                row,
+                4,
+                Formula::new(pallet_price_formula)
+                    .set_result(formula_result(pallet_price)),
+                &number_cell_format,
+            )
+            .map_err(|e| format!("Failed to write List pallet price: {e}"))?;
+    }
+
+    let total_row = layout.sum_excel_row - 1;
+    let total_asin_count = groups.iter().map(|group| group.asin_count as f64).sum::<f64>();
+    let total_ext_retail = groups.iter().map(|group| group.ext_total).sum::<f64>();
+    let total_price_sum = list_price_results.iter().sum::<f64>();
+    let purchase_usd_total = DEFAULT_BSTOCK_MAX_COST_USD + DEFAULT_DELIVERY_COST_USD;
+    let purchase_percent = if total_ext_retail.abs() < f64::EPSILON {
+        0.0
+    } else {
+        purchase_usd_total / total_ext_retail
+    };
+    let average_item_cost = if total_asin_count.abs() < f64::EPSILON {
+        0.0
+    } else {
+        total_ext_retail / total_asin_count
+    };
+    let expected_profit = total_price_sum - purchase_usd_total;
+    let roi = if purchase_usd_total.abs() < f64::EPSILON {
+        0.0
+    } else {
+        expected_profit / purchase_usd_total
+    };
+
+    worksheet
+        .write_string_with_format(total_row, 1, "SUM", &total_label_format)
+        .map_err(|e| format!("Failed to write List total label: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            total_row,
+            2,
+            Formula::new(format!("=SUM(C{data_start_excel_row}:C{data_end_excel_row})"))
+                .set_result(formula_result(total_asin_count)),
+            &total_number_format,
+        )
+        .map_err(|e| format!("Failed to write List total ASIN count: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            total_row,
+            3,
+            Formula::new(format!("=SUM(D{data_start_excel_row}:D{data_end_excel_row})"))
+                .set_result(formula_result(total_ext_retail)),
+            &total_number_format,
+        )
+        .map_err(|e| format!("Failed to write List total Ext. Retail: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            total_row,
+            4,
+            Formula::new(format!("=SUM(E{data_start_excel_row}:E{data_end_excel_row})"))
+                .set_result(formula_result(total_price_sum)),
+            &total_number_format,
+        )
+        .map_err(|e| format!("Failed to write List total pallet price: {e}"))?;
+
+    let admin_title_row = layout.admin_title_excel_row - 1;
+    let average_item_cost_row = layout.average_item_cost_excel_row - 1;
+    let sale_percent_row = layout.sale_percent_excel_row - 1;
+    let purchase_pct_row = layout.purchase_pct_excel_row - 1;
+    let purchase_usd_row = layout.purchase_usd_excel_row - 1;
+    let bstock_cost_row = layout.bstock_cost_excel_row - 1;
+    let delivery_cost_row = layout.delivery_cost_excel_row - 1;
+    let resale_profit_row = layout.resale_profit_excel_row - 1;
+    let roi_row = layout.roi_excel_row - 1;
+
+    worksheet
+        .write_string_with_format(admin_title_row, 1, "Админ блок", &admin_title_format)
+        .map_err(|e| format!("Failed to write List admin title: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            average_item_cost_row,
+            1,
+            "Ср.стоимость 1-го товара",
+            &admin_avg_label_format,
+        )
+        .map_err(|e| format!("Failed to write List average item cost label: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            average_item_cost_row,
+            2,
+            Formula::new(format!(
+                "=D{sum_excel_row}/C{sum_excel_row}",
+                sum_excel_row = layout.sum_excel_row
+            ))
+            .set_result(formula_result(average_item_cost)),
+            &admin_avg_number_format,
+        )
+        .map_err(|e| format!("Failed to write List average item cost formula: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            sale_percent_row,
+            1,
+            "Стоимость продажи (Фаст дил), %",
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List sale percent label: {e}"))?;
+    worksheet
+        .write_number_with_format(
+            sale_percent_row,
+            2,
+            DEFAULT_PALLET_SALE_PERCENT,
+            &admin_percent_format,
+        )
+        .map_err(|e| format!("Failed to write List sale percent value: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            purchase_pct_row,
+            1,
+            "Закупочная цена (общая), %",
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List purchase pct label: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            purchase_pct_row,
+            2,
+            Formula::new(format!(
+                "=C{purchase_usd_excel_row}/D{sum_excel_row}",
+                purchase_usd_excel_row = layout.purchase_usd_excel_row,
+                sum_excel_row = layout.sum_excel_row
+            ))
+            .set_result(formula_result(purchase_percent)),
+            &admin_percent_format,
+        )
+        .map_err(|e| format!("Failed to write List purchase pct formula: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            purchase_usd_row,
+            1,
+            "Закупочная цена (общая), USD",
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List purchase USD label: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            purchase_usd_row,
+            2,
+            Formula::new(format!(
+                "=C{bstock_cost_excel_row}+C{delivery_cost_excel_row}",
+                bstock_cost_excel_row = layout.bstock_cost_excel_row,
+                delivery_cost_excel_row = layout.delivery_cost_excel_row
+            ))
+            .set_result(formula_result(purchase_usd_total)),
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List purchase USD formula: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            bstock_cost_row,
+            1,
+            "Ставка Бисток (макс стоимость), USD",
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List B-Stock cost label: {e}"))?;
+    worksheet
+        .write_number_with_format(
+            bstock_cost_row,
+            2,
+            DEFAULT_BSTOCK_MAX_COST_USD,
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List B-Stock cost value: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            delivery_cost_row,
+            1,
+            "Стомость доставки, USD",
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List delivery cost label: {e}"))?;
+    worksheet
+        .write_number_with_format(
+            delivery_cost_row,
+            2,
+            DEFAULT_DELIVERY_COST_USD,
+            &admin_block_format,
+        )
+        .map_err(|e| format!("Failed to write List delivery cost value: {e}"))?;
+    worksheet
+        .write_string_with_format(
+            resale_profit_row,
+            1,
+            "Ожид.прибыль перепродажи",
+            &admin_bold_format,
+        )
+        .map_err(|e| format!("Failed to write List resale profit label: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            resale_profit_row,
+            2,
+            Formula::new(format!(
+                "=E{sum_excel_row}-C{purchase_usd_excel_row}",
+                sum_excel_row = layout.sum_excel_row,
+                purchase_usd_excel_row = layout.purchase_usd_excel_row
+            ))
+            .set_result(formula_result(expected_profit)),
+            &admin_bold_number_format,
+        )
+        .map_err(|e| format!("Failed to write List resale profit formula: {e}"))?;
+    worksheet
+        .write_string_with_format(roi_row, 1, "ROI", &admin_bold_format)
+        .map_err(|e| format!("Failed to write List ROI label: {e}"))?;
+    worksheet
+        .write_formula_with_format(
+            roi_row,
+            2,
+            Formula::new(format!(
+                "=C{resale_profit_excel_row}/C{purchase_usd_excel_row}",
+                resale_profit_excel_row = layout.resale_profit_excel_row,
+                purchase_usd_excel_row = layout.purchase_usd_excel_row
+            ))
+            .set_result(formula_result(roi)),
+            &admin_bold_percent_format,
+        )
+        .map_err(|e| format!("Failed to write List ROI formula: {e}"))?;
+    worksheet
+        .autofilter(1, 1, 1, 4)
+        .map_err(|e| format!("Failed to set List autofilter: {e}"))?;
+
+    Ok(())
+}
+
 fn write_sheet3(workbook: &mut Workbook, brands: &[BrandSummary]) -> Result<(), String> {
     let worksheet = workbook.add_worksheet();
     worksheet
@@ -909,6 +1300,7 @@ fn write_sheet4(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), S
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_pallets_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), String> {
     let worksheet = workbook.add_worksheet();
     worksheet
@@ -1156,6 +1548,321 @@ fn write_pallets_sheet(workbook: &mut Workbook, groups: &[PalletGroup]) -> Resul
         worksheet
             .autofilter(0, 0, last_item_row, 7)
             .map_err(|e| format!("Failed to set Pallets autofilter: {e}"))?;
+    }
+
+    Ok(())
+}
+
+fn write_pallets_sheet_v2(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), String> {
+    let worksheet = workbook.add_worksheet();
+    worksheet
+        .set_name("Pallets")
+        .map_err(|e| format!("Failed to set Pallets sheet name: {e}"))?;
+    worksheet.set_zoom(80).set_landscape();
+    worksheet
+        .set_top_left_cell(0, 2)
+        .map_err(|e| format!("Failed to set Pallets top-left cell: {e}"))?;
+    worksheet
+        .set_selection(0, 6, 1_048_575, 6)
+        .map_err(|e| format!("Failed to set Pallets selection: {e}"))?;
+
+    for (column, width) in [
+        26.44140625,
+        30.6640625,
+        14.6640625,
+        81.5546875,
+        4.5546875,
+        10.33203125,
+        10.0,
+        29.5546875,
+        13.0,
+        13.0,
+        13.0,
+    ]
+    .iter()
+    .enumerate()
+    {
+        worksheet
+            .set_column_width(column as u16, *width)
+            .map_err(|e| format!("Failed to set Pallets width: {e}"))?;
+    }
+
+    worksheet
+        .set_column_hidden(0)
+        .map_err(|e| format!("Failed to hide Pallets column A: {e}"))?;
+    worksheet
+        .set_column_hidden(1)
+        .map_err(|e| format!("Failed to hide Pallets column B: {e}"))?;
+
+    let hidden_header_format = Format::new().set_bold();
+    let hidden_value_format = Format::new();
+    let blank_cell_format = Format::new();
+    let header_format = Format::new()
+        .set_bold()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xD9E1F2))
+        .set_align(FormatAlign::Center);
+    let header_number_format = Format::new()
+        .set_bold()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xD9E1F2))
+        .set_align(FormatAlign::Center)
+        .set_num_format("#,##0.00");
+    let data_text_format = Format::new().set_border(FormatBorder::Thin);
+    let data_number_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_num_format("#,##0.00");
+    let summary_hidden_format = Format::new().set_border(FormatBorder::Thin);
+    let summary_text_format = Format::new()
+        .set_bold()
+        .set_border_left(FormatBorder::Thin)
+        .set_border_right(FormatBorder::Thin)
+        .set_border_top(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xD9E1F2))
+        .set_align(FormatAlign::Center);
+    let summary_price_format = Format::new()
+        .set_bold()
+        .set_font_size(14)
+        .set_border_left(FormatBorder::Thin)
+        .set_border_right(FormatBorder::Thin)
+        .set_border_top(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xD9E1F2))
+        .set_align(FormatAlign::Left)
+        .set_num_format("0");
+    let summary_number_format = Format::new()
+        .set_bold()
+        .set_border_left(FormatBorder::Thin)
+        .set_border_right(FormatBorder::Thin)
+        .set_border_top(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xD9E1F2))
+        .set_align(FormatAlign::Center)
+        .set_num_format("#,##0");
+    let summary_blank_format = Format::new()
+        .set_border_left(FormatBorder::Thin)
+        .set_border_right(FormatBorder::Thin)
+        .set_border_top(FormatBorder::Thin)
+        .set_align(FormatAlign::Center);
+
+    let headers = [
+        "Category",
+        "Subcategory",
+        "ASIN",
+        "Item Description",
+        "Qty",
+        "Unit Retail",
+        "Ext, Retail",
+        "Pallet ID",
+    ];
+
+    worksheet
+        .write_string_with_format(0, 0, headers[0], &hidden_header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 1, headers[1], &hidden_header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 2, headers[2], &header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 3, headers[3], &header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 4, headers[4], &header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 5, headers[5], &header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 6, headers[6], &header_number_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+    worksheet
+        .write_string_with_format(0, 7, headers[7], &header_format)
+        .map_err(|e| format!("Failed to write Pallets header: {e}"))?;
+
+    for column in 8..=10 {
+        worksheet
+            .write_blank(0, column, &blank_cell_format)
+            .map_err(|e| format!("Failed to write Pallets trailing blank header: {e}"))?;
+    }
+
+    let mut row_index: u32 = 1;
+    let mut last_filter_row: u32 = 0;
+    let list_layout = build_list_sheet_layout(groups.len());
+    let sale_percent_cell_ref = format!("$C${}", list_layout.sale_percent_excel_row);
+
+    for group in groups {
+        let start_row = row_index;
+
+        for row in &group.display_rows {
+            worksheet
+                .write_string_with_format(row_index, 0, &row.category, &hidden_value_format)
+                .map_err(|e| format!("Failed to write Pallets category: {e}"))?;
+            worksheet
+                .write_string_with_format(row_index, 1, &row.subcategory, &hidden_value_format)
+                .map_err(|e| format!("Failed to write Pallets subcategory: {e}"))?;
+            worksheet
+                .write_string_with_format(row_index, 2, &row.asin, &data_text_format)
+                .map_err(|e| format!("Failed to write Pallets ASIN: {e}"))?;
+            worksheet
+                .write_string_with_format(row_index, 3, &row.item_description, &data_text_format)
+                .map_err(|e| format!("Failed to write Pallets description: {e}"))?;
+            worksheet
+                .write_number_with_format(row_index, 4, row.qty, &data_text_format)
+                .map_err(|e| format!("Failed to write Pallets qty: {e}"))?;
+            worksheet
+                .write_string_with_format(row_index, 5, &row.unit_retail_text, &data_text_format)
+                .map_err(|e| format!("Failed to write Pallets unit retail: {e}"))?;
+            worksheet
+                .write_number_with_format(row_index, 6, row.ext_retail, &data_number_format)
+                .map_err(|e| format!("Failed to write Pallets ext retail: {e}"))?;
+            worksheet
+                .write_string_with_format(row_index, 7, &row.pallet_id, &data_text_format)
+                .map_err(|e| format!("Failed to write Pallets pallet id: {e}"))?;
+            row_index += 1;
+        }
+
+        let end_row = row_index.saturating_sub(1);
+        let summary_row = row_index;
+        let excel_summary_row = summary_row + 1;
+        let excel_start_row = start_row + 1;
+        let excel_end_row = end_row + 1;
+        let pallet_price = group.ext_total * DEFAULT_PALLET_SALE_PERCENT;
+
+        worksheet
+            .write_blank(summary_row, 0, &summary_hidden_format)
+            .map_err(|e| format!("Failed to write Pallets summary blank: {e}"))?;
+        worksheet
+            .write_blank(summary_row, 1, &summary_hidden_format)
+            .map_err(|e| format!("Failed to write Pallets summary blank: {e}"))?;
+        worksheet
+            .write_string_with_format(summary_row, 2, "Price", &summary_text_format)
+            .map_err(|e| format!("Failed to write Pallets summary label: {e}"))?;
+        worksheet
+            .write_formula_with_format(
+                summary_row,
+                3,
+                Formula::new(format!("=G{excel_summary_row}*List!{sale_percent_cell_ref}"))
+                    .set_result(formula_result(pallet_price)),
+                &summary_price_format,
+            )
+            .map_err(|e| format!("Failed to write Pallets summary price formula: {e}"))?;
+        worksheet
+            .write_formula_with_format(
+                summary_row,
+                4,
+                Formula::new(format!("=SUM(E{excel_start_row}:E{excel_end_row})"))
+                    .set_result(formula_result(group.qty_total)),
+                &summary_number_format,
+            )
+            .map_err(|e| format!("Failed to write Pallets summary qty formula: {e}"))?;
+        worksheet
+            .write_blank(summary_row, 5, &summary_blank_format)
+            .map_err(|e| format!("Failed to write Pallets summary blank: {e}"))?;
+        worksheet
+            .write_formula_with_format(
+                summary_row,
+                6,
+                Formula::new(format!("=SUM(G{excel_start_row}:G{excel_end_row})"))
+                    .set_result(formula_result(group.ext_total)),
+                &summary_number_format,
+            )
+            .map_err(|e| format!("Failed to write Pallets summary total formula: {e}"))?;
+        worksheet
+            .write_string_with_format(summary_row, 7, &group.pallet_id, &summary_text_format)
+            .map_err(|e| format!("Failed to write Pallets summary pallet id: {e}"))?;
+        worksheet
+            .set_row_height(summary_row, 18.2)
+            .map_err(|e| format!("Failed to set Pallets summary row height: {e}"))?;
+
+        row_index += 1;
+        last_filter_row = summary_row;
+
+        worksheet
+            .write_blank(row_index, 0, &hidden_value_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header blank: {e}"))?;
+        worksheet
+            .write_blank(row_index, 1, &hidden_value_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header blank: {e}"))?;
+        worksheet
+            .write_string_with_format(row_index, 2, headers[2], &header_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header: {e}"))?;
+        worksheet
+            .write_string_with_format(row_index, 3, headers[3], &header_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header: {e}"))?;
+        worksheet
+            .write_string_with_format(row_index, 4, headers[4], &header_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header: {e}"))?;
+        worksheet
+            .write_string_with_format(row_index, 5, headers[5], &header_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header: {e}"))?;
+        worksheet
+            .write_string_with_format(row_index, 6, headers[6], &header_number_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header: {e}"))?;
+        worksheet
+            .write_string_with_format(row_index, 7, headers[7], &header_format)
+            .map_err(|e| format!("Failed to write Pallets repeated header: {e}"))?;
+
+        for column in 8..=10 {
+            worksheet
+                .write_blank(row_index, column, &blank_cell_format)
+                .map_err(|e| format!("Failed to write Pallets trailing blank header: {e}"))?;
+        }
+
+        row_index += 1;
+    }
+
+    if last_filter_row > 0 {
+        worksheet
+            .autofilter(0, 0, last_filter_row, 7)
+            .map_err(|e| format!("Failed to set Pallets autofilter: {e}"))?;
+    }
+
+    Ok(())
+}
+
+fn write_summary_sheet(workbook: &mut Workbook, items: &[ItemSummary]) -> Result<(), String> {
+    let worksheet = workbook.add_worksheet();
+    worksheet
+        .set_name("сводная")
+        .map_err(|e| format!("Failed to set summary sheet name: {e}"))?;
+    worksheet.set_zoom(70);
+    worksheet
+        .set_top_left_cell(880, 0)
+        .map_err(|e| format!("Failed to set summary top-left cell: {e}"))?;
+    worksheet
+        .set_selection(915, 1, 915, 1)
+        .map_err(|e| format!("Failed to set summary selection: {e}"))?;
+
+    for (column, width) in [57.21875, 10.44140625, 15.77734375].iter().enumerate() {
+        worksheet
+            .set_column_width(column as u16, *width)
+            .map_err(|e| format!("Failed to set summary width: {e}"))?;
+    }
+
+    worksheet
+        .write_string(2, 1, "Values")
+        .map_err(|e| format!("Failed to write summary title: {e}"))?;
+    worksheet
+        .write_string(3, 0, "Item Description")
+        .map_err(|e| format!("Failed to write summary header: {e}"))?;
+    worksheet
+        .write_string(3, 1, "Sum of Qty")
+        .map_err(|e| format!("Failed to write summary header: {e}"))?;
+    worksheet
+        .write_string(3, 2, "Sum of Ext, Retail")
+        .map_err(|e| format!("Failed to write summary header: {e}"))?;
+
+    for (index, item) in items.iter().enumerate() {
+        let row = index as u32 + 4;
+        worksheet
+            .write_string(row, 0, &item.item_description)
+            .map_err(|e| format!("Failed to write summary item description: {e}"))?;
+        worksheet
+            .write_number(row, 1, item.qty_total)
+            .map_err(|e| format!("Failed to write summary qty: {e}"))?;
+        worksheet
+            .write_number(row, 2, item.ext_total)
+            .map_err(|e| format!("Failed to write summary retail: {e}"))?;
     }
 
     Ok(())
@@ -1592,6 +2299,7 @@ fn generate_flat_workbook(
     let raw_lines = read_raw_lines(file_path)?;
     let rows = parse_pallet_manifest_csv(file_path)?;
     let groups = build_pallet_groups(&rows);
+    let item_summaries = build_item_summaries(&rows);
     let brands = build_brand_summaries(&rows);
     let output_path = finalize_output_path(save_path);
 
@@ -1601,17 +2309,18 @@ fn generate_flat_workbook(
     let raw_sheet_name = build_raw_sheet_name(file_path);
 
     write_raw_sheet(&mut workbook, &raw_sheet_name, &raw_lines)?;
-    write_list_sheet(&mut workbook, &groups)?;
     write_sheet3(&mut workbook, &brands)?;
     write_sheet2(&mut workbook, &groups)?;
     write_sheet4(&mut workbook, &groups)?;
-    write_pallets_sheet(&mut workbook, &groups)?;
+    write_list_sheet_v2(&mut workbook, &groups)?;
+    write_pallets_sheet_v2(&mut workbook, &groups)?;
+    write_summary_sheet(&mut workbook, &item_summaries)?;
     write_brands_sheet(&mut workbook, &brands)?;
 
     workbook
         .save(&output_path)
         .map_err(|e| format!("Failed to save pallet manifest workbook: {e}"))?;
-    update_generated_workbook_xml(&output_path, rows.len(), groups.len())?;
+    update_generated_workbook_xml(&output_path)?;
 
     Ok(PalletManifestExportResult {
         file_path: output_path,
@@ -1647,6 +2356,27 @@ mod tests {
             unit_retail_text: format!("{ext_retail:.2}"),
             ext_retail,
             brand: brand.to_string(),
+            pallet_id: pallet_id.to_string(),
+        }
+    }
+
+    fn make_custom_row(
+        pallet_id: &str,
+        asin: &str,
+        description: &str,
+        qty: f64,
+        unit_retail_text: &str,
+        ext_retail: f64,
+    ) -> PalletManifestRow {
+        PalletManifestRow {
+            category: "Home".to_string(),
+            subcategory: "Kitchen".to_string(),
+            asin: asin.to_string(),
+            item_description: description.to_string(),
+            qty,
+            unit_retail_text: unit_retail_text.to_string(),
+            ext_retail,
+            brand: "Brand".to_string(),
             pallet_id: pallet_id.to_string(),
         }
     }
@@ -1687,6 +2417,41 @@ mod tests {
         assert!((brands[0].ext_total - 125.0).abs() < 0.001);
         assert_eq!(brands[1].brand, "Zed");
         assert_eq!(brands[2].brand, "(blank)");
+    }
+
+    #[test]
+    fn aggregate_pallet_rows_merges_duplicate_lines_and_sums_qty() {
+        let rows = vec![
+            make_custom_row("PAL-1", "ASIN-1", "Widget", 1.0, "9.99", 9.99),
+            make_custom_row("PAL-1", "ASIN-1", "Widget", 2.0, "9.99", 19.98),
+            make_custom_row("PAL-1", "ASIN-2", "Other", 1.0, "4.50", 4.50),
+        ];
+
+        let aggregated = aggregate_pallet_rows(&rows);
+
+        assert_eq!(aggregated.len(), 2);
+        assert_eq!(aggregated[0].asin, "ASIN-1");
+        assert!((aggregated[0].qty - 3.0).abs() < 0.001);
+        assert!((aggregated[0].ext_retail - 29.97).abs() < 0.001);
+        assert_eq!(aggregated[1].asin, "ASIN-2");
+    }
+
+    #[test]
+    fn build_item_summaries_groups_by_description_and_sorts_alpha() {
+        let rows = vec![
+            make_custom_row("PAL-1", "A1", "Beta", 1.0, "5.00", 5.0),
+            make_custom_row("PAL-2", "A2", "Alpha", 2.0, "3.00", 6.0),
+            make_custom_row("PAL-3", "A3", "Beta", 3.0, "2.00", 6.0),
+        ];
+
+        let summaries = build_item_summaries(&rows);
+
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].item_description, "Alpha");
+        assert_eq!(summaries[0].qty_total, 2.0);
+        assert_eq!(summaries[1].item_description, "Beta");
+        assert_eq!(summaries[1].qty_total, 4.0);
+        assert!((summaries[1].ext_total - 11.0).abs() < 0.001);
     }
 
     #[test]

@@ -105,13 +105,15 @@ fn import_manifest(
             "InStock"
         };
         let condition = csv_parser::extract_and_normalize_condition(&row.description);
+        let read_description_flag =
+            csv_parser::parse_read_description_flag(&row.read_description_flag);
 
         db.conn
             .execute(
                 "INSERT INTO inventory_items
                  (id, manifest_id, lot_number, raw_title, vendor_code, source,
-                  retail_price, cost_price, min_price, quantity, current_status, auction_id, condition)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  retail_price, cost_price, min_price, quantity, current_status, auction_id, condition, read_description_flag)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 rusqlite::params![
                     item_id,
                     manifest_id,
@@ -125,7 +127,8 @@ fn import_manifest(
                     row.quantity.parse::<i32>().unwrap_or(1),
                     status,
                     auction_id.as_ref(),
-                    condition
+                    condition,
+                    read_description_flag
                 ],
             )
             .map_err(|e| e.to_string())?;

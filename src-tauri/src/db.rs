@@ -17,6 +17,7 @@ pub struct InventoryItemRow {
     pub vendor_code: Option<String>,
     pub source: Option<String>,
     pub condition: Option<String>,
+    pub read_description_flag: bool,
     pub normalized_title: Option<String>,
     pub extracted_brand: Option<String>,
     pub extracted_model: Option<String>,
@@ -129,6 +130,7 @@ impl Database {
                 vendor_code TEXT,
                 source TEXT,
                 condition TEXT,
+                read_description_flag BOOLEAN NOT NULL DEFAULT FALSE,
 
                 -- Normalized data
                 normalized_title TEXT,
@@ -384,6 +386,10 @@ impl Database {
         );
         let _ = self.conn.execute(
             "ALTER TABLE inventory_items ADD COLUMN buybacker_id TEXT",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE inventory_items ADD COLUMN read_description_flag BOOLEAN NOT NULL DEFAULT FALSE",
             [],
         );
         // Migration: keep per-attempt snapshot data for reliable repeater analytics
@@ -791,7 +797,7 @@ impl Database {
     pub fn get_inventory_items(&self, status: Option<&str>) -> Result<Vec<InventoryItemRow>> {
         let mut query = String::from(
             "SELECT id, manifest_id, lot_number, quantity,
-                    raw_title, vendor_code, source, condition,
+                    raw_title, vendor_code, source, condition, read_description_flag,
                     normalized_title, extracted_brand, extracted_model, sku_extracted, category,
                     retail_price, cost_price, min_price,
                     current_status, auction_id, listed_at, sold_at,
@@ -820,22 +826,23 @@ impl Database {
                     vendor_code: row.get(5)?,
                     source: row.get(6)?,
                     condition: row.get(7)?,
-                    normalized_title: row.get(8)?,
-                    extracted_brand: row.get(9)?,
-                    extracted_model: row.get(10)?,
-                    sku_extracted: row.get(11)?,
-                    category: row.get(12)?,
-                    retail_price: row.get(13)?,
-                    cost_price: row.get(14)?,
-                    min_price: row.get(15)?,
-                    current_status: row.get(16)?,
-                    auction_id: row.get(17)?,
-                    listed_at: row.get(18)?,
-                    sold_at: row.get(19)?,
-                    sale_order: row.get(20)?,
-                    buybacker_id: row.get(21)?,
-                    created_at: row.get(22)?,
-                    updated_at: row.get(23)?,
+                    read_description_flag: row.get::<_, Option<bool>>(8)?.unwrap_or(false),
+                    normalized_title: row.get(9)?,
+                    extracted_brand: row.get(10)?,
+                    extracted_model: row.get(11)?,
+                    sku_extracted: row.get(12)?,
+                    category: row.get(13)?,
+                    retail_price: row.get(14)?,
+                    cost_price: row.get(15)?,
+                    min_price: row.get(16)?,
+                    current_status: row.get(17)?,
+                    auction_id: row.get(18)?,
+                    listed_at: row.get(19)?,
+                    sold_at: row.get(20)?,
+                    sale_order: row.get(21)?,
+                    buybacker_id: row.get(22)?,
+                    created_at: row.get(23)?,
+                    updated_at: row.get(24)?,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;

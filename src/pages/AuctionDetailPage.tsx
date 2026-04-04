@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import type { Auction, InventoryItem, ConditionType, Buybacker, ItemHistoryEntry, Vendor } from '@/types';
 import { ArrowLeft, X, Search, Flag, FileSpreadsheet, Calculator, History, RefreshCw, PlusCircle, AlertCircle, Trash2, CheckSquare } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { SortableTableHead } from '@/components/ui/sortable-table-head';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
