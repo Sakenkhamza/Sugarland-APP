@@ -1,15 +1,15 @@
 {
-  "version": "0.1.31",
+  "version": "0.1.32",
   "notes": "See the assets to download this version and install.",
-  "pub_date": "2026-04-04T20:55:39Z",
+  "pub_date": "2026-04-06T05:03:40Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1k1K0ZxWEpnVUUvN2ZBM3hYRytjSEdkWUJwb1JkdElXdy83RjJRSU9yVHgrQi9ab0czajRyMHUrR2xnSDNKZFZ6Q3BtNFE3NElUa1lhSzFocCtGc2w3bVhjTURJckFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzM2MjU5CWZpbGU6U3VnYXJsYW5kXzAuMS4zMV94NjQtc2V0dXAuZXhlCnJHSXlqdjRETjQrdStVNW5UZU9HSDRlMndwTmFYQVZ6NUYvb3VhUlBsRldNU0FSZzJzTzA3NCs0c0ttU1ZBZGZ4YTRlRFZOUzVEeWhLd3hZZFYwZURBPT0K",
-      "url": "https://github.com/Sakenkhamza/Sugarland-APP/releases/download/v0.1.31/Sugarland_0.1.31_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1k1K0ZxWEpnVUd3bndJWU5VQTNBTUF5aHZoNkMvRlBZN0pucmJJczVEV0VyRXlnT2w2VW84N291SlNmdDBKTnZsbjZsNGVyU0pybngrcHVBa3UvSmY4cGoxZy9BalFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1NDUxOTkxCWZpbGU6U3VnYXJsYW5kXzAuMS4zMl94NjQtc2V0dXAuZXhlCmphekZKamxuK2FHemNaeDVPMU01djdEb0szOEg3RG5aZ0t5V3I0U2JwVlFIRTkyNy83c0ZuclVlell0Q0k4QzZ1K1JCdVBSNU1lRE5JTXJUV3B2aUFnPT0K",
+      "url": "https://github.com/Sakenkhamza/Sugarland-APP/releases/download/v0.1.32/Sugarland_0.1.32_x64-setup.exe"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1k1K0ZxWEpnVUJISkhLZTArMFdQSEljNkRuNk4wa3lLWDd1L3JSRUJoMTJCcUdIMmI4VUNKR0FybWJ5NU9RTCtSL2k2Qjl1STd4U09BTThERWhiejdEaWEwZEpIUUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzM2MTM4CWZpbGU6U3VnYXJsYW5kLmFwcC50YXIuZ3oKb1lieHlzb1Q0ZEtVcXRmK1BBKzJJR3JrTmZtRFJZRFQvNi9paURkc1VVQ2F1RXlHcHltNXJoUXpyUVVTOER3bWE4UVVFZ1Z4TVVyVWs1UytCNzhjRFE9PQo=",
-      "url": "https://github.com/Sakenkhamza/Sugarland-APP/releases/download/v0.1.31/Sugarland_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1k1K0ZxWEpnVU9LTGhSeVRTek9IaFZkNldCYmZscXh6OUFiNWQ3bHM0MjVPQm9yTWhFZW94ZWd2cVBpdnhWR25LQk40MERHWjBhNXJLcnR0MlpMZmlTZEFlRktsZlFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1NDUxODE5CWZpbGU6U3VnYXJsYW5kLmFwcC50YXIuZ3oKbU05c3lBM1dwcGVJQzg4ZXArQ1RFa0RXMmJxaTZGd3NtMGRSUWl5a0VPdlNSTEV6K1lvRW41K0hYMVBSRnNxV0xiZ3crNjZhR2c1VmFTeU1qZDdYQWc9PQo=",
+      "url": "https://github.com/Sakenkhamza/Sugarland-APP/releases/download/v0.1.32/Sugarland_aarch64.app.tar.gz"
     }
   }
 }
