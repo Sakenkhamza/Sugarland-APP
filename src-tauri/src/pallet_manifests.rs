@@ -924,7 +924,7 @@ fn write_list_sheet_v2(workbook: &mut Workbook, groups: &[PalletGroup]) -> Resul
             .write_string_with_format(row, 1, &group.pallet_id, &text_cell_format)
             .map_err(|e| format!("Failed to write List pallet id: {e}"))?;
         worksheet
-            .write_number_with_format(row, 2, group.asin_count as f64, &number_cell_format)
+            .write_number_with_format(row, 2, group.qty_total, &number_cell_format)
             .map_err(|e| format!("Failed to write List ASIN count: {e}"))?;
         worksheet
             .write_number_with_format(row, 3, group.ext_total, &number_cell_format)
@@ -941,7 +941,7 @@ fn write_list_sheet_v2(workbook: &mut Workbook, groups: &[PalletGroup]) -> Resul
     }
 
     let total_row = layout.sum_excel_row - 1;
-    let total_asin_count = groups.iter().map(|group| group.asin_count as f64).sum::<f64>();
+    let total_asin_count = groups.iter().map(|group| group.qty_total).sum::<f64>();
     let total_ext_retail = groups.iter().map(|group| group.ext_total).sum::<f64>();
     let total_price_sum = list_price_results.iter().sum::<f64>();
     let purchase_usd_total = DEFAULT_BSTOCK_MAX_COST_USD + DEFAULT_DELIVERY_COST_USD;
@@ -1241,7 +1241,7 @@ fn write_sheet2(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), S
             .write_string(row, 0, &group.pallet_id)
             .map_err(|e| format!("Failed to write Sheet2 pallet id: {e}"))?;
         worksheet
-            .write_number(row, 1, group.asin_count as f64)
+            .write_number(row, 1, group.qty_total)
             .map_err(|e| format!("Failed to write Sheet2 count: {e}"))?;
         worksheet
             .write_number(row, 2, group.ext_total)
@@ -1290,7 +1290,7 @@ fn write_sheet4(workbook: &mut Workbook, groups: &[PalletGroup]) -> Result<(), S
             .write_string_with_format(row, 1, &group.pallet_id, &cell_format)
             .map_err(|e| format!("Failed to write Sheet4 pallet id: {e}"))?;
         worksheet
-            .write_number_with_format(row, 2, group.asin_count as f64, &cell_format)
+            .write_number_with_format(row, 2, group.qty_total, &cell_format)
             .map_err(|e| format!("Failed to write Sheet4 count: {e}"))?;
         worksheet
             .write_number_with_format(row, 3, group.ext_total, &cell_format)
